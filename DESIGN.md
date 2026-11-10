@@ -277,6 +277,19 @@ openidea-plugin index market/ --publisher acme --name "ACME" --key acme.key
 
 ---
 
+## 6.7 上架执行记录（A 路径 · 社区 marketplace，2026-11-10）
+
+- 仓库：`https://github.com/absolutelyZero/openidea-plugin-stock-ticker`（**public**，main）。publisher 沿用未被占用的 `acme`，owners = `absolutelyZero`，许可证 MIT。
+- 补齐材料：根与包内各一份 `LICENSE`；`plugin.toml` 补 `authors`/`license`/`homepage`/`change-notes`；**移除未使用的 `clipboard` 能力**（生产代码从未调用 `copy_to_clipboard`，仅测试 mock 曾声明）；README 新增「Capabilities and why」逐项说明（registry 硬性要求）与源码构建说明。
+- `cargo test` 55 passed；`openidea-plugin build` → `dist/plugin.wasm` 323.6 KiB + `check ok`；能力降为 5 项（3 个 optional net + events + storage）。
+- `keygen` 生成 publisher 密钥（私钥文件仅存于被 gitignore 排除的 `.workbuddy/tmp/acme.key`，**绝不入库/不外发/不展示内容**），公钥 `uLQJc+81W5zhTy080p0G61XZRPV0r6ZAwJspwn/Ft8k=`。
+- `pack . --key … --publisher acme` → `.workbuddy/tmp/acme.stock-ticker-0.1.0.oiplugin`（133.0 KiB, signed by acme）；`check <包>` **ok**；SHA-256 `fe68cb316f9730e4a68fc41842fbc79d182aaf0cc0780d67d4c148dad7e414b3`。
+- PR 草稿已生成于 `.workbuddy/tmp/registry-pr/`：`publishers/acme.toml`、`plugins/acme.stock-ticker.toml`，格式对照 registry 现有 `aritti.*` 条目核对一致；registry 55 个插件中无同名项。
+- **仍待用户执行（外发动作，本轮未做）**：把上述本地改动 push 到 main；把签名包作为 `v0.1.0` Release 附件上传；向 `l0ng-ai/openidea-plugins` 提 PR。本机无 `gh` CLI 与凭据，故不代持、不代发。
+- **风险**：registry CI 用**最新 release（v0.1.40 / API 1.4）** 的 CLI 跑 `check`，而本包由 0.1.39 / API 1.3 构建；文档称已发布的 1.3 插件继续可用，但本地 Windows 无法闭环验证，需在 CI 结果中确认。签名包内容一旦发布不可改，只能发新版本。
+
+---
+
 ## 7. 生命周期与时序
 
 ### 7.1 `activate(ctx)`

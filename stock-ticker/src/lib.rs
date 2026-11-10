@@ -477,7 +477,6 @@ mod tests {
         MockHost::install().with_capabilities(&[
             "storage",
             "events",
-            "clipboard",
             "net:push2.eastmoney.com",
             "net:push2delay.eastmoney.com",
             "net:searchapi.eastmoney.com",

@@ -1,8 +1,11 @@
 id = "acme.stock-ticker"
 name = "Stock Ticker"
 version = "0.1.0"
-description = "A-share quotes in a single native side tool window."
-authors = []
+description = "A-share quotes in a native side tool window, with fuzzy symbol search and activity-throttled refresh."
+authors = ["absolutelyZero"]
+license = "MIT"
+homepage = "https://github.com/absolutelyZero/openidea-plugin-stock-ticker"
+change-notes = "0.1.0 — first release: watchlist quotes, fuzzy add, 15 s activity heartbeat."
 categories = ["tools"]
 icon = "icon.svg"
 icon-dark = "icon_dark.svg"
@@ -12,7 +15,7 @@ activation = ["on-view:watchlist", "on-schedule:60", "on-event:editor-focused", 
 
 [capabilities]
 required = ["storage", "events"]
-optional = ["net:push2.eastmoney.com", "net:push2delay.eastmoney.com", "net:searchapi.eastmoney.com", "clipboard"]
+optional = ["net:push2.eastmoney.com", "net:push2delay.eastmoney.com", "net:searchapi.eastmoney.com"]
 
 [[contributes.commands]]
 id = "refresh"

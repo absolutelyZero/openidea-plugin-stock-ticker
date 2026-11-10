@@ -81,6 +81,40 @@ openidea-plugin links            # list linked folders
 openidea-plugin unlink .         # remove the link (rollback)
 ```
 
+## Capabilities and why
+
+The plugin requests only what its features need. All grants are optional except
+the two local ones; revoking a network grant degrades gracefully instead of
+breaking the view.
+
+| Capability | Risk | Why this plugin needs it | If revoked |
+| --- | --- | --- | --- |
+| `storage` (required) | low | Persist the watchlist, last quote snapshot, sort order and alert de-duplication across IDE restarts and the 5-minute idle reclaim | plugin cannot load |
+| `events` (required) | low | Receive the 60 s `Scheduled` tick and the editor/file events used by the 15 s activity heartbeat | no automatic refresh |
+| `net:push2.eastmoney.com` (optional) | medium | Primary batched A-share quote endpoint: one HTTPS request per refresh for the whole watchlist plus indices | falls back to the delayed host |
+| `net:push2delay.eastmoney.com` (optional) | medium | Backup source with the same schema when the primary fails or is denied | cached snapshot shown with a stale status |
+| `net:searchapi.eastmoney.com` (optional) | medium | Fuzzy lookup when adding by Chinese name, pinyin initials (`dftx`) or a partial code | adding by full code still works; name search reports the missing grant |
+
+No `process:*`, `fs.*`, `secrets`, `project.write`, `ide.commands` or clipboard
+access is used. All requests are read-only HTTPS with a 4 s timeout; no data
+leaves the machine other than these three quote/search requests.
+
+## Building from source
+
+`dist/plugin.wasm` is **not** checked in — it is built from the Rust sources in
+`src/` and the vendored SDK in `../vendor/openidea-plugin`:
+
+```sh
+cargo test                                   # 55 native tests against the SDK mock host
+rustup target add wasm32-wasip2
+cargo build --release --target wasm32-wasip2
+# or, equivalently, the official CLI (which then runs check):
+openidea-plugin build
+```
+
+The published `.oiplugin` is produced from exactly these sources with
+`openidea-plugin pack`; it contains no obfuscated or minified code.
+
 ## Network endpoints
 
 | Purpose | Host | Capability |

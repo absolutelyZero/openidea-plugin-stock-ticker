@@ -1,0 +1,5 @@
+.openidea/
+.workbuddy/
+stock-ticker/dist/
+stock-ticker/target/
+vendor/openidea-plugin/target/

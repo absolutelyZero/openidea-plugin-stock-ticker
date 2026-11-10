@@ -285,7 +285,8 @@ openidea-plugin index market/ --publisher acme --name "ACME" --key acme.key
 - `keygen` 生成 publisher 密钥（私钥文件仅存于被 gitignore 排除的 `.workbuddy/tmp/acme.key`，**绝不入库/不外发/不展示内容**），公钥 `uLQJc+81W5zhTy080p0G61XZRPV0r6ZAwJspwn/Ft8k=`。
 - `pack . --key … --publisher acme` → `.workbuddy/tmp/acme.stock-ticker-0.1.0.oiplugin`（133.0 KiB, signed by acme）；`check <包>` **ok**；SHA-256 `fe68cb316f9730e4a68fc41842fbc79d182aaf0cc0780d67d4c148dad7e414b3`。
 - PR 草稿已生成于 `.workbuddy/tmp/registry-pr/`：`publishers/acme.toml`、`plugins/acme.stock-ticker.toml`，格式对照 registry 现有 `aritti.*` 条目核对一致；registry 55 个插件中无同名项。
-- **仍待用户执行（外发动作，本轮未做）**：把上述本地改动 push 到 main；把签名包作为 `v0.1.0` Release 附件上传；向 `l0ng-ai/openidea-plugins` 提 PR。本机无 `gh` CLI 与凭据，故不代持、不代发。
+- **已执行**：本地提交 `0f42f6d` 已 fast-forward push 到 main（远程 `plugin.toml`/`LICENSE` 已核实同步）；annotated tag `v0.1.0` 已推送，签名包 SHA-256 未变。
+- **仍待用户执行**：把签名包作为 `v0.1.0` Release 附件上传；向 `l0ng-ai/openidea-plugins` 提 PR（需 fork）。本机无 `gh` CLI 与 GitHub token，且按权限边界不从 credential manager 提取凭据代发；Release API/PR 属需用户身份的外发动作。
 - **风险**：registry CI 用**最新 release（v0.1.40 / API 1.4）** 的 CLI 跑 `check`，而本包由 0.1.39 / API 1.3 构建；文档称已发布的 1.3 插件继续可用，但本地 Windows 无法闭环验证，需在 CI 结果中确认。签名包内容一旦发布不可改，只能发新版本。
 
 ---

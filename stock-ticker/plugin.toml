@@ -1,0 +1,74 @@
+id = "acme.stock-ticker"
+name = "Stock Ticker"
+version = "0.1.0"
+description = "A-share quotes in a single native side tool window."
+authors = []
+categories = ["tools"]
+icon = "icon.svg"
+icon-dark = "icon_dark.svg"
+engines.openidea = "^1.3"
+wasm = "dist/plugin.wasm"
+activation = ["on-view:watchlist", "on-schedule:60", "on-event:editor-focused", "on-event:file-saved"]
+
+[capabilities]
+required = ["storage", "events"]
+optional = ["net:push2.eastmoney.com", "net:push2delay.eastmoney.com", "net:searchapi.eastmoney.com", "clipboard"]
+
+[[contributes.commands]]
+id = "refresh"
+title = "Stock: Refresh Quotes"
+category = "Stock"
+
+[[contributes.commands]]
+id = "add"
+title = "Stock: Add Symbol"
+category = "Stock"
+
+[[contributes.commands]]
+id = "open"
+title = "Stock: Open Quote Page"
+category = "Stock"
+
+[[contributes.commands]]
+id = "remove"
+title = "Stock: Remove Symbol"
+category = "Stock"
+
+[[contributes.commands]]
+id = "reveal"
+title = "Stock: Show Watchlist"
+category = "Stock"
+
+[[contributes.commands]]
+id = "test-connection"
+title = "Stock: Test Data Source"
+category = "Stock"
+
+# A single native tool window backed by a `sortable_table`.
+[[contributes.views]]
+id = "watchlist"
+title = "行情"
+location = "right"
+group = "stock"
+
+[[contributes.statusBar]]
+id = "index"
+text = "行情 —"
+tooltip = "点击刷新行情"
+command = "refresh"
+
+[[contributes.keymaps]]
+command = "refresh"
+key = "Ctrl+Alt+S"
+
+[contributes.settings]
+title = "Stock Ticker"
+
+[[contributes.settings.pages]]
+id = "general"
+title = "常规"
+schema = "settings/general.json"
+
+[[contributes.settings.pages.actions]]
+title = "测试连接"
+command = "test-connection"

@@ -1,0 +1,37 @@
+{
+  "properties": {
+    "precision": {
+      "type": "integer",
+      "title": "小数位数",
+      "default": 2
+    },
+    "showIndices": {
+      "type": "boolean",
+      "title": "显示指数",
+      "default": true
+    },
+    "staleAfterSecs": {
+      "type": "integer",
+      "title": "陈旧阈值（秒）",
+      "default": 180
+    },
+    "source": {
+      "type": "string",
+      "title": "数据源",
+      "enum": ["primary", "delayed"],
+      "default": "primary"
+    },
+    "changeStyle": {
+      "type": "string",
+      "title": "涨跌样式",
+      "enum": ["sign", "arrow"],
+      "default": "sign"
+    },
+    "colorScheme": {
+      "type": "string",
+      "title": "涨跌配色",
+      "enum": ["cn", "us", "none"],
+      "default": "cn"
+    }
+  }
+}

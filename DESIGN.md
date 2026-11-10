@@ -252,7 +252,7 @@ GET https://searchapi.eastmoney.com/api/suggest/get?input=<urlencoded>&type=14&c
 **设计**：深蓝圆角方底 + 四根渐高的成交量柱（半透明白）+ 红色上升折线 + 末端红点（红=涨，A 股习惯；**仅用于品牌图标，行情表格仍无红绿**）。暗色版底板提亮到 `#233A63`、折线提亮到 `#FF6B66`，避免在深色主题里沉没。全部纯色、无渐变（规避 `url()` 风险）、无文字（规避字体依赖），在小尺寸下只保留粗线条轮廓。两套各 **925 B**。
 
 **接入与验证**：`plugin.toml` 增加 `icon = "icon.svg"` / `icon-dark = "icon_dark.svg"`；`openidea-plugin check` **ok**。另用与 sanitizer 相同的白名单做静态核验，两个文件均 OK。生成**未签名本地验证包**
-`pack . --out .workbuddy/tmp/acme.stock-ticker-0.1.0.unsigned.oiplugin`（130.7 KiB），
+`pack . --out .workbuddy/tmp/absolutelyzero.stock-ticker-0.1.0.unsigned.oiplugin`（130.7 KiB），
 包内 6 个文件含 `icon.svg` 与 `icon_dark.svg` → 证明素材确实随包分发。
 
 > 注意：`pack` **不**执行图标 sanitize；真正的 `plugin_icon()` → `sanitize_svg()` 在
@@ -265,29 +265,30 @@ GET https://searchapi.eastmoney.com/api/suggest/get?input=<urlencoded>&type=14&c
 | `authors` | 空数组 |
 | `license` / `LICENSE` 文件 | 均无（`pack` 会自动收录 `LICENSE*`/`README.md`） |
 | `homepage` / `change-notes` | 均无（可选，marketplace 展示用） |
-| publisher | `id = "acme.stock-ticker"` → 签名时 `--publisher` **必须是 `acme`**（`main.rs:562–563`）；换名须先改 id 前缀 |
+| publisher | `id = "absolutelyzero.stock-ticker"` → 签名时 `--publisher` **必须是 `absolutelyzero`**（`main.rs:562–563`）；换名须先改 id 前缀 |
 | `version` | `0.1.0`，已合 semver |
 
 **命令草案（未执行，涉及私钥与发布）**：
 ```
-openidea-plugin keygen acme.key                      # 一次性；私钥绝不入库、不外发
-openidea-plugin pack . --key acme.key --publisher acme
-openidea-plugin index market/ --publisher acme --name "ACME" --key acme.key
+openidea-plugin keygen absolutelyzero.key                      # 一次性；私钥绝不入库、不外发
+openidea-plugin pack . --key absolutelyzero.key --publisher absolutelyzero
+openidea-plugin index market/ --publisher absolutelyzero --name "absolutelyZero" --key absolutelyzero.key
 ```
 
 ---
 
 ## 6.7 上架执行记录（A 路径 · 社区 marketplace，2026-11-10）
 
-- 仓库：`https://github.com/absolutelyZero/openidea-plugin-stock-ticker`（**public**，main）。publisher 沿用未被占用的 `acme`，owners = `absolutelyZero`，许可证 MIT。
+- 仓库：`https://github.com/absolutelyZero/openidea-plugin-stock-ticker`（**public**，main）。publisher = `absolutelyzero`，owners = `absolutelyZero`，许可证 MIT。
 - 补齐材料：根与包内各一份 `LICENSE`；`plugin.toml` 补 `authors`/`license`/`homepage`/`change-notes`；**移除未使用的 `clipboard` 能力**（生产代码从未调用 `copy_to_clipboard`，仅测试 mock 曾声明）；README 新增「Capabilities and why」逐项说明（registry 硬性要求）与源码构建说明。
 - `cargo test` 55 passed；`openidea-plugin build` → `dist/plugin.wasm` 323.6 KiB + `check ok`；能力降为 5 项（3 个 optional net + events + storage）。
-- `keygen` 生成 publisher 密钥（私钥文件仅存于被 gitignore 排除的 `.workbuddy/tmp/acme.key`，**绝不入库/不外发/不展示内容**），公钥 `uLQJc+81W5zhTy080p0G61XZRPV0r6ZAwJspwn/Ft8k=`。
-- `pack . --key … --publisher acme` → `.workbuddy/tmp/acme.stock-ticker-0.1.0.oiplugin`（133.0 KiB, signed by acme）；`check <包>` **ok**；SHA-256 `fe68cb316f9730e4a68fc41842fbc79d182aaf0cc0780d67d4c148dad7e414b3`。
-- PR 草稿已生成于 `.workbuddy/tmp/registry-pr/`：`publishers/acme.toml`、`plugins/acme.stock-ticker.toml`，格式对照 registry 现有 `aritti.*` 条目核对一致；registry 55 个插件中无同名项。
+- `keygen` 生成 publisher 密钥（私钥文件仅存于被 gitignore 排除的 `.workbuddy/tmp/absolutelyzero.key`，**绝不入库/不外发/不展示内容**），公钥 `lQ9T2cTXJkKXSX/wIZVsGMeCdifSrBBNDZiHItH5bvU=`。
+- `pack . --key … --publisher absolutelyzero` → `.workbuddy/tmp/absolutelyzero.stock-ticker-0.1.0.oiplugin`（133.0 KiB, signed by absolutelyzero）；`check <包>` **ok**；SHA-256 `a4175d19d258cf87737142ebfb751610a6f09fb3311c149e9eb153a7d782669d`。
+- PR 草稿已生成于 `.workbuddy/tmp/registry-pr/`：`publishers/absolutelyzero.toml`、`plugins/absolutelyzero.stock-ticker.toml`，格式对照 registry 现有 `aritti.*` 条目核对一致；registry 中无同名项。
 - **已执行**：本地提交 `0f42f6d` 已 fast-forward push 到 main（远程 `plugin.toml`/`LICENSE` 已核实同步）；annotated tag `v0.1.0` 已推送，签名包 SHA-256 未变。
 - **仍待用户执行**：把签名包作为 `v0.1.0` Release 附件上传；向 `l0ng-ai/openidea-plugins` 提 PR（需 fork）。本机无 `gh` CLI 与 GitHub token，且按权限边界不从 credential manager 提取凭据代发；Release API/PR 属需用户身份的外发动作。
 - **风险**：registry CI 用**最新 release（v0.1.40 / API 1.4）** 的 CLI 跑 `check`，而本包由 0.1.39 / API 1.3 构建；文档称已发布的 1.3 插件继续可用，但本地 Windows 无法闭环验证，需在 CI 结果中确认。签名包内容一旦发布不可改，只能发新版本。
+- **2026-11-10 改 publisher**：将发布者从模板占位 `acme` 改为真实发布者 `absolutelyzero`（与 GitHub 用户名一致）。已改 `plugin.toml` 的 `id` 前缀、`src/lib.rs` 测试上下文、`DESIGN.md` 示例；重新 `keygen`（新公钥 `lQ9T2cTXJkKXSX/wIZVsGMeCdifSrBBNDZiHItH5bvU=`）+ `pack --publisher absolutelyzero` 生成新签名包 `absolutelyzero.stock-ticker-0.1.0.oiplugin`（SHA `a4175d19d258cf87737142ebfb751610a6f09fb3311c149e9eb153a7d782669d`）；PR 草稿改为 `publishers/absolutelyzero.toml`、`plugins/absolutelyzero.stock-ticker.toml`。上一条 `0f42f6d`/tag `v0.1.0` 为 acme 版，本次将重新提交并把 tag 移动到新 commit。
 
 ---
 
@@ -338,7 +339,7 @@ publish(state);   // refresh_view + 状态栏
 
 ## 8. manifest（`plugin.toml`）
 ```toml
-id = "acme.stock-ticker"
+id = "absolutelyzero.stock-ticker"
 name = "Stock Ticker"
 version = "0.1.0"
 description = "A-share quotes in a single native side tool window."
@@ -449,7 +450,7 @@ let mock = MockHost::install().with_capabilities(&[
     "net:push2delay.eastmoney.com","net:searchapi.eastmoney.com"]);
 mock.on_fetch(|_| Ok(HttpResponse { status:200, headers:vec![], body: FIXTURE.as_bytes().to_vec() }));
 let mut p = StockPlugin::default();
-p.activate(&mock.context("acme.stock-ticker")).unwrap();
+p.activate(&mock.context("absolutelyzero.stock-ticker")).unwrap();
 assert_eq!(p.render("watchlist", None, &ctx).unwrap().body, Body::Other{kind:"table",..});
 assert!(mock.refreshed_views().contains(&"watchlist".to_string()));
 ```

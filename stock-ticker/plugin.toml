@@ -1,4 +1,4 @@
-id = "acme.stock-ticker"
+id = "absolutelyzero.stock-ticker"
 name = "Stock Ticker"
 version = "0.1.0"
 description = "A-share quotes in a native side tool window, with fuzzy symbol search and activity-throttled refresh."

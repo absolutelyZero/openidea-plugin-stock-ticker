@@ -489,7 +489,7 @@ mod tests {
             Ok(HttpResponse { status: 200, headers: vec![], body: GOOD.as_bytes().to_vec() })
         });
         let mut p = StockPlugin::default();
-        p.activate(&h.context("acme.stock-ticker")).unwrap();
+        p.activate(&h.context("absolutelyzero.stock-ticker")).unwrap();
         h.answer_next_prompt(Some(&["600519"]));
         p.run_command("add", &h.invocation(), None).unwrap();
         (h, p)
@@ -499,7 +499,7 @@ mod tests {
     fn activation_subscribes_and_sets_status_item() {
         let h = mock();
         let mut p = StockPlugin::default();
-        p.activate(&h.context("acme.stock-ticker")).unwrap();
+        p.activate(&h.context("absolutelyzero.stock-ticker")).unwrap();
         assert!(h.subscriptions().contains(&EventKind::Scheduled));
         assert!(h.status_items().contains_key("index"));
     }
@@ -618,7 +618,7 @@ mod tests {
     fn activation_subscribes_to_the_activity_heartbeat() {
         let h = mock();
         let mut p = StockPlugin::default();
-        p.activate(&h.context("acme.stock-ticker")).unwrap();
+        p.activate(&h.context("absolutelyzero.stock-ticker")).unwrap();
         let subs = h.subscriptions();
         assert!(subs.contains(&EventKind::Scheduled));
         assert!(subs.contains(&EventKind::EditorFocused));
@@ -667,7 +667,7 @@ mod tests {
     fn missing_capabilities_still_activate_and_render() {
         let h = MockHost::install();
         let mut p = StockPlugin::default();
-        assert!(p.activate(&h.context("acme.stock-ticker")).is_ok());
+        assert!(p.activate(&h.context("absolutelyzero.stock-ticker")).is_ok());
         assert!(p.render(VIEW_WATCHLIST, None, &h.invocation()).is_ok());
     }
 
@@ -676,7 +676,7 @@ mod tests {
         let h = mock();
         host::storage::set("watch.v1", "not-json").unwrap();
         let mut p = StockPlugin::default();
-        assert!(p.activate(&h.context("acme.stock-ticker")).is_ok());
+        assert!(p.activate(&h.context("absolutelyzero.stock-ticker")).is_ok());
         assert!(p.state.watch.is_empty());
     }
 
@@ -718,7 +718,7 @@ mod tests {
             }
         });
         let mut p = StockPlugin::default();
-        p.activate(&h.context("acme.stock-ticker")).unwrap();
+        p.activate(&h.context("absolutelyzero.stock-ticker")).unwrap();
         h.answer_next_prompt(Some(&["茅台"])); // host::input text
         p.run_command("add", &h.invocation(), None).unwrap();
         (h, p)
@@ -764,7 +764,7 @@ mod tests {
             }
         });
         let mut p = StockPlugin::default();
-        p.activate(&h.context("acme.stock-ticker")).unwrap();
+        p.activate(&h.context("absolutelyzero.stock-ticker")).unwrap();
         h.answer_next_prompt(Some(&["dftx"]));
         p.run_command("add", &h.invocation(), None).unwrap();
         let view = p.render(VIEW_WATCHLIST, None, &h.invocation()).unwrap();
@@ -818,7 +818,7 @@ mod tests {
             }
         });
         let mut p = StockPlugin::default();
-        p.activate(&h.context("acme.stock-ticker")).unwrap();
+        p.activate(&h.context("absolutelyzero.stock-ticker")).unwrap();
         h.answer_next_prompt(Some(&["不存在的股票xyz"]));
         let err = p.run_command("add", &h.invocation(), None).unwrap_err();
         assert!(format!("{err}").contains("未找到匹配"));

@@ -1,0 +1,128 @@
+name: Release plugin package
+
+# Build, sign and publish the .oiplugin as a GitHub Release asset.
+# Triggered by pushing a version tag (v*), or manually via workflow_dispatch.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to release (e.g. v0.3.2)'
+        required: true
+        type: string
+
+permissions:
+  contents: write # create the Release and upload assets
+
+env:
+  PUBLISHER: absolutelyzero
+  PLUGIN_ID: stock-ticker
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag and version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"
+          echo "version=$VERSION"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Guard - tag matches plugin.toml version
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_version="$(grep -m1 '^version = ' stock-ticker/plugin.toml | sed -E 's/^version = "([^"]+)".*/\1/')"
+          echo "plugin.toml version: $manifest_version"
+          echo "tag version:         ${{ steps.ver.outputs.version }}"
+          if [ "$manifest_version" != "${{ steps.ver.outputs.version }}" ]; then
+            echo "::error::Tag ${{ steps.ver.outputs.tag }} does not match plugin.toml version $manifest_version"
+            exit 1
+          fi
+
+      - name: Install Rust wasm target
+        run: rustup target add wasm32-wasip2
+
+      - name: Install openidea-plugin CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          tag="$(gh release view --repo l0ng-ai/openidea --json tagName -q .tagName)"
+          if gh release download "$tag" --repo l0ng-ai/openidea \
+              -p openidea-plugin-linux-x86_64.gz -D "$RUNNER_TEMP"; then
+            gunzip -c "$RUNNER_TEMP/openidea-plugin-linux-x86_64.gz" > "$HOME/.local/bin/openidea-plugin"
+            chmod +x "$HOME/.local/bin/openidea-plugin"
+          else
+            cargo install --locked --git https://github.com/l0ng-ai/openidea ide-host --bin openidea-plugin
+          fi
+          "$HOME/.local/bin/openidea-plugin" --version
+
+      - name: Test
+        working-directory: stock-ticker
+        run: cargo test
+
+      - name: Build
+        working-directory: stock-ticker
+        run: openidea-plugin build
+
+      - name: Sign and pack
+        shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::error::Secret SIGNING_KEY is not set. Add the base64 ed25519 seed as a repository secret."
+            exit 1
+          fi
+          keyfile="$(mktemp)"
+          trap 'rm -f "$keyfile"' EXIT
+          # Secret content is a single-line base64 seed (no trailing newline).
+          printf '%s' "$SIGNING_KEY" > "$keyfile"
+          chmod 600 "$keyfile"
+          cd stock-ticker
+          openidea-plugin pack . \
+            --key "$keyfile" \
+            --publisher "${{ env.PUBLISHER }}" \
+            --out "${{ env.PUBLISHER }}.${{ env.PLUGIN_ID }}-${{ steps.ver.outputs.version }}.oiplugin"
+
+      - name: Verify signed package
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="${{ env.PUBLISHER }}.${{ env.PLUGIN_ID }}-${{ steps.ver.outputs.version }}.oiplugin"
+          openidea-plugin check "$pkg"
+          sha256sum "$pkg" | tee "$pkg.sha256"
+
+      - name: Publish Release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pkg="${{ env.PUBLISHER }}.${{ env.PLUGIN_ID }}-${{ steps.ver.outputs.version }}.oiplugin"
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            "$pkg" "$pkg.sha256" \
+            --title "${{ env.PLUGIN_ID }} ${{ steps.ver.outputs.version }}" \
+            --generate-notes \
+            --verify-tag

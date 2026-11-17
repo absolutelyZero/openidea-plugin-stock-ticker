@@ -8,9 +8,16 @@ use std::cmp::Ordering;
 pub const COLUMNS: [&str; 4] = ["代码", "名称", "现价", "涨跌%"];
 pub const MAX_WATCH: usize = 200;
 
-/// Indices requested alongside the watchlist. Explicit secids avoid the
-/// ambiguity of `000001` (SSE composite vs. SZSE Ping An Bank).
-pub const INDEX_SECIDS: [&str; 3] = ["1.000001", "0.399001", "0.399006"];
+/// Which order the watchlist rows are displayed in. `Column` sorts by the
+/// selected header (a transient view); `Custom` follows the persisted `watch`
+/// array order defined by drag-and-drop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OrderMode {
+    #[default]
+    Column,
+    Custom,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct WatchItem {
@@ -64,6 +71,7 @@ pub struct RenderOptions {
     pub precision: usize,
     pub sort: TableSort,
     pub arrow_style: bool,
+    pub order_mode: OrderMode,
 }
 
 /// Accept `1.600519`, `sh600519`, `600519`. Market is inferred from the first
@@ -191,6 +199,11 @@ pub fn ordered_rows(
         })
         .collect();
 
+    // Custom order follows the persisted watchlist order verbatim; column
+    // sorting is a transient view and never reorders the underlying list.
+    if opts.order_mode == OrderMode::Custom {
+        return rows;
+    }
     let col = (opts.sort.column as usize).min(COLUMNS.len() - 1);
     let descending = opts.sort.descending;
     rows.sort_by(|a, b| {
@@ -203,27 +216,6 @@ pub fn ordered_rows(
         ord.then_with(|| a.symbol.cmp(&b.symbol))
     });
     rows
-}
-
-pub fn index_rows(
-    snapshot: Option<&Snapshot>,
-    precision: usize,
-    arrow_style: bool,
-) -> Vec<Row> {
-    let Some(s) = snapshot else { return Vec::new() };
-    INDEX_SECIDS
-        .iter()
-        .filter_map(|sid| s.quotes.iter().find(|q| &q.symbol == sid))
-        .map(|q| Row {
-            symbol: q.symbol.clone(),
-            cells: vec![
-                code_of(&q.symbol).to_string(),
-                q.name.clone(),
-                fixed(q.price, precision),
-                signed(q.change_pct, precision, "%", arrow_style),
-            ],
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -268,7 +260,7 @@ mod tests {
         let rows = ordered_rows(
             &watch,
             Some(&snap),
-            RenderOptions { precision: 2, sort: sort(0, false), arrow_style: true },
+            RenderOptions { precision: 2, sort: sort(0, false), arrow_style: true, order_mode: OrderMode::Column },
         );
         assert_eq!(COLUMNS, ["代码", "名称", "现价", "涨跌%"]);
         assert_eq!(rows[0].cells.len(), 4);
@@ -286,7 +278,7 @@ mod tests {
         let rows = ordered_rows(
             &watch,
             Some(&snap),
-            RenderOptions { precision: 2, sort: sort(0, false), arrow_style: true },
+            RenderOptions { precision: 2, sort: sort(0, false), arrow_style: true, order_mode: OrderMode::Column },
         );
         assert!(rows[0].cells[3].contains('▼'));
     }
@@ -297,7 +289,7 @@ mod tests {
         let rows = ordered_rows(
             &watch,
             None,
-            RenderOptions { precision: 2, sort: sort(2, true), arrow_style: false },
+            RenderOptions { precision: 2, sort: sort(2, true), arrow_style: false, order_mode: OrderMode::Column },
         );
         assert_eq!(rows[0].cells[2], "—");
     }
@@ -316,7 +308,7 @@ mod tests {
             let rows = ordered_rows(
                 &watch,
                 Some(&snap),
-                RenderOptions { precision: 2, sort: sort(2, desc), arrow_style: true },
+                RenderOptions { precision: 2, sort: sort(2, desc), arrow_style: true, order_mode: OrderMode::Column },
             );
             assert_eq!(rows.last().unwrap().symbol, "0.000001");
         }
@@ -329,8 +321,57 @@ mod tests {
         let rows = ordered_rows(
             &watch,
             Some(&snap),
-            RenderOptions { precision: 2, sort: sort(0, false), arrow_style: false },
+            RenderOptions { precision: 2, sort: sort(0, false), arrow_style: false, order_mode: OrderMode::Column },
         );
         assert_eq!(rows[0].cells[3], "+1.33%");
+    }
+
+    #[test]
+    fn custom_mode_follows_watch_order_and_ignores_column_sort() {
+        // 代码按字典序会是 000001 < 300750 < 600519；watch 顺序刻意相反。
+        let watch: Vec<WatchItem> = ["1.600519", "0.300750", "0.000001"]
+            .iter()
+            .map(|s| WatchItem { symbol: (*s).into(), ..WatchItem::default() })
+            .collect();
+        let snap = Snapshot {
+            quotes: vec![
+                quote("1.600519", 100.0, 1.0),
+                quote("0.300750", 50.0, -1.0),
+                quote("0.000001", 10.0, 2.0),
+            ],
+            ..Snapshot::default()
+        };
+        let rows = ordered_rows(
+            &watch,
+            Some(&snap),
+            RenderOptions {
+                precision: 2,
+                sort: sort(0, false), // 列排序会按代码重排
+                arrow_style: true,
+                order_mode: OrderMode::Custom,
+            },
+        );
+        let got: Vec<&str> = rows.iter().map(|r| r.symbol.as_str()).collect();
+        assert_eq!(got, ["1.600519", "0.300750", "0.000001"]);
+    }
+
+    #[test]
+    fn column_mode_still_sorts_by_selected_column() {
+        let watch: Vec<WatchItem> = ["1.600519", "0.300750", "0.000001"]
+            .iter()
+            .map(|s| WatchItem { symbol: (*s).into(), ..WatchItem::default() })
+            .collect();
+        let rows = ordered_rows(
+            &watch,
+            None,
+            RenderOptions {
+                precision: 2,
+                sort: sort(0, false),
+                arrow_style: true,
+                order_mode: OrderMode::Column,
+            },
+        );
+        let got: Vec<&str> = rows.iter().map(|r| r.symbol.as_str()).collect();
+        assert_eq!(got, ["0.000001", "0.300750", "1.600519"]);
     }
 }

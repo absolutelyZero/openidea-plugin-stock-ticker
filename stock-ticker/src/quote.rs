@@ -1,82 +1,111 @@
-//! East Money `ulist.np` response parser. Everything is optional: the public
-//! endpoint sometimes returns `"-"` strings, nulls or a `diff` object instead
-//! of an array. Malformed input must never overwrite a good cached snapshot.
+//! Tencent `qt.gtimg.cn` response parser. The endpoint answers one
+//! `v_<market><code>="…"` statement per symbol in a `~`-separated,
+//! GBK-encoded body. Everything is optional: a suspended symbol still yields a
+//! row, and a malformed body never overwrites a good snapshot.
 
 use crate::model::Quote;
-use serde_json::Value;
+use encoding_rs::GBK;
 
-fn num(value: &Value, key: &str) -> Option<f64> {
-    match value.get(key) {
-        Some(Value::Number(n)) => n.as_f64(),
-        Some(Value::String(s)) => s.parse::<f64>().ok(),
-        _ => None,
+/// Field positions confirmed against a live response on 2026-11-16.
+const F_NAME: usize = 1;
+const F_CODE: usize = 2;
+const F_PRICE: usize = 3;
+const F_PREV_CLOSE: usize = 4;
+const F_OPEN: usize = 5;
+const F_VOLUME: usize = 6;
+const F_TIME: usize = 30;
+const F_CHANGE: usize = 31;
+const F_CHANGE_PCT: usize = 32;
+const F_HIGH: usize = 33;
+const F_LOW: usize = 34;
+const F_TURNOVER_WAN: usize = 37;
+const MIN_FIELDS: usize = 35;
+
+fn num(field: Option<&str>) -> Option<f64> {
+    let field = field?.trim();
+    if field.is_empty() || field == "-" {
+        return None;
     }
+    field.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
-fn int(value: &Value, key: &str) -> Option<i64> {
-    value
-        .get(key)
-        .and_then(|v| v.as_i64().or_else(|| num(value, key).map(|f| f as i64)))
-}
-
-fn text(value: &Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string()
-}
-
-fn symbol_of(value: &Value) -> String {
-    let code = text(value, "f12");
-    match int(value, "f13") {
-        Some(1) => format!("1.{code}"),
-        Some(0) => format!("0.{code}"),
-        _ => code,
+/// `sh`/`sz`/`bj` → the `market.code` secid the rest of the plugin uses.
+fn secid(prefix: &str, code: &str) -> Option<String> {
+    if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
     }
-}
-
-/// Parse a response body. Returns an error when the frame is unusable; callers
-/// then keep their previous snapshot and try the backup source.
-pub fn parse_eastmoney(bytes: &[u8]) -> Result<Vec<Quote>, String> {
-    let root: Value = serde_json::from_slice(bytes).map_err(|e| format!("invalid JSON: {e}"))?;
-    let data = root.get("data").ok_or_else(|| "missing data".to_string())?;
-    if data.is_null() {
-        return Err("data is null".into());
-    }
-    let diff = data.get("diff").ok_or_else(|| "missing data.diff".to_string())?;
-
-    let items: Vec<&Value> = match diff {
-        Value::Array(items) => items.iter().collect(),
-        Value::Object(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort_by_key(|k| k.parse::<usize>().unwrap_or(usize::MAX));
-            keys.into_iter().filter_map(|k| map.get(k)).collect()
-        }
-        _ => return Err("data.diff is neither an array nor an object".into()),
+    let market = match prefix {
+        "sh" => "1",
+        "sz" => "0",
+        // East Money routes Beijing listings through the 0. channel.
+        "bj" => "0",
+        _ => return None,
     };
+    Some(format!("{market}.{code}"))
+}
 
-    let quotes: Vec<Quote> = items
-        .into_iter()
-        .map(|v| Quote {
-            symbol: symbol_of(v),
-            name: text(v, "f14"),
-            price: num(v, "f2"),
-            prev_close: num(v, "f18"),
-            open: num(v, "f17"),
-            high: num(v, "f15"),
-            low: num(v, "f16"),
-            change: num(v, "f4"),
-            change_pct: num(v, "f3"),
-            volume: num(v, "f5"),
-            turnover: num(v, "f6"),
-            ts: int(v, "f124"),
-        })
-        .filter(|q| !q.symbol.is_empty())
-        .collect();
+/// `yyyyMMddHHmmss` in Beijing time → UTC epoch seconds.
+fn ts_of(field: Option<&str>) -> Option<i64> {
+    let raw = field?.trim();
+    if raw.len() != 14 || !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let y: i64 = raw[0..4].parse().ok()?;
+    let mo: i64 = raw[4..6].parse().ok()?;
+    let d: i64 = raw[6..8].parse().ok()?;
+    let h: i64 = raw[8..10].parse().ok()?;
+    let mi: i64 = raw[10..12].parse().ok()?;
+    let s: i64 = raw[12..14].parse().ok()?;
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
+        return None;
+    }
+    Some(days_from_civil(y, mo, d) * 86_400 + h * 3_600 + mi * 60 + s - 8 * 3_600)
+}
 
+/// Days since 1970-01-01 for a proleptic Gregorian date (Hinnant's algorithm).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Parse a response body. Returns an error when the frame is unusable; the
+/// caller then keeps its previous snapshot.
+pub fn parse_tencent(bytes: &[u8]) -> Result<Vec<Quote>, String> {
+    let (text, _, _) = GBK.decode(bytes);
+    let mut quotes = Vec::new();
+    for statement in text.split(';') {
+        let statement = statement.trim();
+        let Some((key, value)) = statement.split_once('=') else { continue };
+        let Some(prefix) = key.trim().strip_prefix("v_").and_then(|k| k.get(0..2)) else {
+            continue;
+        };
+        let fields: Vec<&str> = value.trim().trim_matches('"').split('~').collect();
+        if fields.len() < MIN_FIELDS {
+            continue;
+        }
+        let Some(symbol) = secid(prefix, fields[F_CODE].trim()) else { continue };
+        quotes.push(Quote {
+            symbol,
+            name: fields[F_NAME].trim().to_string(),
+            price: num(fields.get(F_PRICE).copied()),
+            prev_close: num(fields.get(F_PREV_CLOSE).copied()),
+            open: num(fields.get(F_OPEN).copied()),
+            high: num(fields.get(F_HIGH).copied()),
+            low: num(fields.get(F_LOW).copied()),
+            change: num(fields.get(F_CHANGE).copied()),
+            change_pct: num(fields.get(F_CHANGE_PCT).copied()),
+            volume: num(fields.get(F_VOLUME).copied()),
+            turnover: num(fields.get(F_TURNOVER_WAN).copied()).map(|v| v * 10_000.0),
+            ts: ts_of(fields.get(F_TIME).copied()),
+        });
+    }
     if quotes.is_empty() {
-        return Err("no usable quotes in data.diff".into());
+        return Err("no usable quotes in the Tencent response".into());
     }
     Ok(quotes)
 }
@@ -85,77 +114,86 @@ pub fn parse_eastmoney(bytes: &[u8]) -> Result<Vec<Quote>, String> {
 mod tests {
     use super::*;
 
-    const FIXTURE: &str = r#"{
-      "rc": 0, "rt": 10,
-      "data": { "total": 2, "diff": [
-        {"f2":1500.0,"f3":1.23,"f4":18.2,"f5":12345,"f6":987654,
-         "f12":"600519","f13":1,"f14":"贵州茅台","f15":1510.0,
-         "f16":1488.0,"f17":1495.0,"f18":1481.8,"f124":1730000000},
-        {"f2":"-","f3":null,"f4":"-","f12":"000001","f13":0,
-         "f14":"平安银行","f18":"12.30","f124":1730000001}
-      ]}
-    }"#;
+    fn gbk(s: &str) -> Vec<u8> {
+        let (bytes, _, _) = GBK.encode(s);
+        bytes.into_owned()
+    }
+
+    /// Shape captured from the live endpoint on 2026-11-16 (fields kept in
+    /// their original positions).
+    fn body() -> Vec<u8> {
+        gbk(concat!(
+            "v_sh600519=\"1~贵州茅台~600519~1438.55~1435.26~1426.30~18370~10067~8302~",
+            "1438.55~1~1438.54~1~1438.45~1~1438.44~1~1438.34~1~1439.00~3~1439.04~1~",
+            "1439.20~1~1439.50~3~1439.55~1~~20261116113253~3.29~0.23~1445.60~1425.00~",
+            "1438.55/18370/2640163153~18370~264016~0.15~21.89\";",
+            "v_sz000001=\"51~平安银行~000001~12.16~12.07~12.06~1141378~596211~545167~",
+            "12.16~1357~12.15~463~12.14~2918~12.13~1305~12.12~1582~12.17~707~12.18~3164~",
+            "12.19~1947~12.20~4254~12.21~2292~~20261116113306~0.09~0.75~12.23~12.05~",
+            "12.16/1141378/1387037682~1141378~138704~0.59~5.43\";"
+        ))
+    }
 
     #[test]
-    fn parses_a_normal_response() {
-        let q = parse_eastmoney(FIXTURE.as_bytes()).unwrap();
+    fn parses_a_live_shape_response() {
+        let q = parse_tencent(&body()).unwrap();
         assert_eq!(q.len(), 2);
         assert_eq!(q[0].symbol, "1.600519");
         assert_eq!(q[0].name, "贵州茅台");
-        assert_eq!(q[0].price, Some(1500.0));
-        assert_eq!(q[0].change_pct, Some(1.23));
-        assert_eq!(q[0].prev_close, Some(1481.8));
-        assert_eq!(q[0].ts, Some(1730000000));
-    }
-
-    #[test]
-    fn dash_and_null_become_none() {
-        let q = parse_eastmoney(FIXTURE.as_bytes()).unwrap();
+        assert_eq!(q[0].price, Some(1438.55));
+        assert_eq!(q[0].prev_close, Some(1435.26));
+        assert_eq!(q[0].open, Some(1426.30));
+        assert_eq!(q[0].change, Some(3.29));
+        assert_eq!(q[0].change_pct, Some(0.23));
+        assert_eq!(q[0].high, Some(1445.60));
+        assert_eq!(q[0].low, Some(1425.00));
+        assert_eq!(q[0].volume, Some(18_370.0));
+        assert_eq!(q[0].turnover, Some(2_640_160_000.0));
+        assert!(q[0].ts.is_some());
         assert_eq!(q[1].symbol, "0.000001");
-        assert_eq!(q[1].price, None);
-        assert_eq!(q[1].change_pct, None);
-        assert_eq!(q[1].prev_close, Some(12.30));
+        assert_eq!(q[1].name, "平安银行");
     }
 
     #[test]
-    fn accepts_diff_as_an_object() {
-        let body = r#"{"data":{"diff":{"1":{"f12":"600519","f13":1,"f14":"贵州茅台","f2":1500.0},"0":{"f12":"000001","f13":0,"f14":"平安银行","f2":12.3}}}}"#;
-        let q = parse_eastmoney(body.as_bytes()).unwrap();
-        assert_eq!(q.len(), 2);
-        assert_eq!(q[0].symbol, "0.000001");
-        assert_eq!(q[1].symbol, "1.600519");
+    fn suspended_symbol_still_yields_a_row() {
+        let b = gbk(concat!(
+            "v_sh600519=\"1~停牌股~600519~0.00~10.00~0.00~0~0~0~0.00~0~0.00~0~0.00~0~",
+            "0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~~20261116150000~0.00~0.00~",
+            "0.00~0.00~0~0~0~0~0\";"
+        ));
+        let q = parse_tencent(&b).unwrap();
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].price, Some(0.0));
+        assert_eq!(q[0].name, "停牌股");
     }
 
     #[test]
-    fn rejects_unusable_frames() {
-        for body in ["not json", "{}", r#"{"data":null}"#, r#"{"data":{"diff":[]}}"#] {
-            assert!(parse_eastmoney(body.as_bytes()).is_err(), "should reject {body}");
+    fn index_rows_map_back_to_secids() {
+        let b = gbk("v_sh000001=\"1~上证指数~000001~3620.00~3634.35~3611.54~277036290~0~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~~20261116113200~-14.35~-0.39~3623.12~3593.45~3620.00/277036290/421756737368~277036290~42175674~0.57~16.50~~3623.12~3593.45~0.82~569675.08~634958.76~0.00~-1~-1~1.24~0~3605.81~~~~~~42175673.7368~0.0000~0~ ~ZS~-8.79~-1.11~~~~4258.86~3574.27~-0.50~-2.97~-7.82~4865879337250~~11.04~-12.43~4865879337250~~~-9.28~-0.03~~CNY~0~~0.00~0~\";");
+        let q = parse_tencent(&b).unwrap();
+        assert_eq!(q[0].symbol, "1.000001");
+        assert_eq!(q[0].name, "上证指数");
+        assert_eq!(q[0].change_pct, Some(-0.39));
+    }
+
+    #[test]
+    fn rejects_unusable_bodies() {
+        for body in [
+            b"not a quote".as_slice(),
+            b"v_sh600519=\"1~x\"".as_slice(),
+            b"".as_slice(),
+        ] {
+            assert!(parse_tencent(body).is_err(), "should reject");
         }
     }
 
     #[test]
-    fn tolerates_missing_market_field() {
-        let body = r#"{"data":{"diff":[{"f12":"600519","f14":"贵州茅台","f2":1500.0}]}}"#;
-        let q = parse_eastmoney(body.as_bytes()).unwrap();
-        assert_eq!(q[0].symbol, "600519");
-    }
-
-    /// Snapshot of a real `push2.eastmoney.com` response (2026-11-09).
-    /// `fltt=2` returns true decimals — there is no /100 scaling.
-    #[test]
-    fn matches_the_live_endpoint_contract() {
-        const LIVE: &str = include_str!("../tests/fixtures/eastmoney-live.json");
-        let q = parse_eastmoney(LIVE.as_bytes()).unwrap();
-        assert_eq!(q.len(), 3);
-        assert_eq!(q[0].symbol, "1.600519");
-        assert_eq!(q[0].price, Some(1442.17));
-        assert_eq!(q[0].change_pct, Some(-0.75));
-        assert_eq!(q[0].prev_close, Some(1453.0));
-        // `000001` is both Ping An Bank and the SSE composite: f13 separates them.
-        assert_eq!(q[1].symbol, "0.000001");
-        assert_eq!(q[1].name, "平安银行");
-        assert_eq!(q[2].symbol, "1.000001");
-        assert_eq!(q[2].name, "上证指数");
-        assert!(q.iter().all(|x| x.ts.is_some()));
+    fn timestamp_conversion_is_sane() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(2000, 3, 1), 11_017);
+        assert!(ts_of(Some("20261116113253")).is_some());
+        assert!(ts_of(Some("20261316113253")).is_none());
+        assert!(ts_of(Some("bad")).is_none());
+        assert!(ts_of(None).is_none());
     }
 }

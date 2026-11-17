@@ -1,7 +1,7 @@
 //! Persisted state. The wasm instance is reclaimed after five idle minutes, so
 //! `host::storage` is the only source of truth; instance memory is a cache.
 
-use crate::model::{Snapshot, WatchItem};
+use crate::model::{OrderMode, Snapshot, WatchItem};
 use openidea_plugin::{Error, LogLevel, host, views::TableSort};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const WATCH: &str = "watch.v1";
 const QUOTES: &str = "quotes.v1";
 const SORT: &str = "sort.v1";
+const ORDER_MODE: &str = "order-mode.v1";
 const META: &str = "meta.v1";
 const ALERT_PREFIX: &str = "alert.";
 
@@ -29,9 +30,7 @@ struct SortState {
 pub struct DisplayConfig {
     pub precision: usize,
     pub arrow_style: bool,
-    pub source: String,
     pub stale_after_secs: i64,
-    pub show_indices: bool,
 }
 
 impl DisplayConfig {
@@ -40,9 +39,7 @@ impl DisplayConfig {
         Self {
             precision: 2,
             arrow_style: true,
-            source: "primary".into(),
             stale_after_secs: 180,
-            show_indices: true,
         }
     }
 
@@ -53,11 +50,9 @@ impl DisplayConfig {
                 .map(|v| v.clamp(0.0, 6.0) as usize)
                 .unwrap_or(2),
             arrow_style: host::setting_string("changeStyle").as_deref() != Some("sign"),
-            source: host::setting_string("source").unwrap_or_else(|| "primary".into()),
             stale_after_secs: host::setting_number("staleAfterSecs")
                 .map(|v| v.clamp(30.0, 3600.0) as i64)
                 .unwrap_or(180),
-            show_indices: host::setting_bool("showIndices").unwrap_or(true),
         }
     }
 }
@@ -67,6 +62,7 @@ pub struct State {
     pub watch: Vec<WatchItem>,
     pub snapshot: Option<Snapshot>,
     pub sort: TableSort,
+    pub order_mode: OrderMode,
     pub meta: Meta,
     pub config: DisplayConfig,
 }
@@ -77,6 +73,7 @@ impl Default for State {
             watch: Vec::new(),
             snapshot: None,
             sort: TableSort { column: 0, descending: false },
+            order_mode: OrderMode::Column,
             meta: Meta::default(),
             config: DisplayConfig::fallback(),
         }
@@ -112,6 +109,9 @@ impl State {
             watch: read(WATCH, Vec::new()),
             snapshot: read(QUOTES, None),
             sort: TableSort { column: sort.column, descending: sort.descending },
+            // Legacy data has no order-mode key: fall back to column sorting
+            // so upgrades keep the previous visible behavior.
+            order_mode: read(ORDER_MODE, OrderMode::Column),
             meta: read(META, Meta::default()),
             config: DisplayConfig::read(),
         };
@@ -137,6 +137,10 @@ impl State {
             SORT,
             &SortState { column: self.sort.column, descending: self.sort.descending },
         )
+    }
+
+    pub fn save_order_mode(&self) -> Result<(), Error> {
+        write(ORDER_MODE, &self.order_mode)
     }
 
     pub fn save_meta(&self) -> Result<(), Error> {
@@ -165,27 +169,44 @@ impl State {
     }
 
     pub fn status_text(&self) -> String {
-        let (time, stale) = match &self.snapshot {
+        let (time, stale, clock) = match &self.snapshot {
             Some(s) => {
                 let age = now_secs().saturating_sub(s.fetched_at);
-                (format_age(age), age > self.config.stale_after_secs)
+                let clock = s
+                    .quotes
+                    .iter()
+                    .filter_map(|q| q.ts)
+                    .max()
+                    .map(fmt_clock)
+                    .unwrap_or_default();
+                (format_age(age), age > self.config.stale_after_secs, clock)
             }
-            None => ("无数据".into(), true),
+            None => ("无数据".into(), true, String::new()),
         };
         let suffix = match &self.meta.last_error {
             Some(e) => format!(" · {e}"),
             None => String::new(),
         };
         let stale_mark = if stale { " · 陈旧" } else { "" };
+        // The quote clock (from the data source) makes a refresh visible: if it
+        // never advances, nothing is being fetched.
+        let clock_part = if clock.is_empty() { String::new() } else { format!(" · {clock}") };
         format!(
-            "{} 只 · {} · {}{}{}",
+            "{} 只 · {}{} · {}{}{}",
             self.watch.len(),
             self.snapshot.as_ref().map(|s| s.source.as_str()).unwrap_or("未拉取"),
+            clock_part,
             time,
             stale_mark,
             suffix
         )
     }
+}
+
+/// Beijing-time clock for a quote timestamp (seconds since the epoch).
+fn fmt_clock(ts: i64) -> String {
+    let s = (ts + 8 * 3_600).rem_euclid(86_400);
+    format!("{:02}:{:02}:{:02}", s / 3_600, (s % 3_600) / 60, s % 60)
 }
 
 fn format_age(secs: i64) -> String {
@@ -209,6 +230,7 @@ mod tests {
         let mut s = State::load();
         s.watch.push(WatchItem { symbol: "1.600519".into(), cost: Some(1500.0), ..Default::default() });
         s.sort = TableSort { column: 4, descending: true };
+        s.order_mode = OrderMode::Custom;
         s.meta.failures = 2;
         s.snapshot = Some(Snapshot {
             fetched_at: 123,
@@ -217,14 +239,28 @@ mod tests {
         });
         s.save_watch().unwrap();
         s.save_sort().unwrap();
+        s.save_order_mode().unwrap();
         s.save_meta().unwrap();
         s.save_snapshot().unwrap();
         let restored = State::load();
         assert_eq!(restored.watch, s.watch);
         assert_eq!(restored.sort, s.sort);
+        assert_eq!(restored.order_mode, OrderMode::Custom);
         assert_eq!(restored.meta.failures, 2);
         assert_eq!(restored.snapshot.unwrap().fetched_at, 123);
         assert_eq!(h.storage()["watch.v1"], serde_json::to_string(&s.watch).unwrap());
+    }
+
+    #[test]
+    fn missing_order_mode_falls_back_to_column() {
+        let _h = MockHost::install().with_capabilities(&["storage"]);
+        // No order-mode.v1 key: legacy data must keep column behavior and not
+        // lose watch/sort data.
+        host::storage::set("watch.v1", r#"[{"symbol":"1.600519"}]"#).unwrap();
+        let s = State::load();
+        assert_eq!(s.order_mode, OrderMode::Column);
+        assert_eq!(s.watch.len(), 1);
+        assert_eq!(s.watch[0].symbol, "1.600519");
     }
 
     #[test]

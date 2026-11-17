@@ -1,0 +1,372 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: var(--openidea-bg, transparent);
+    --fg: var(--openidea-fg, #cccccc);
+    --fg-muted: var(--openidea-fg-muted, #8b949e);
+    --border: var(--openidea-border, #3c3c3c);
+    --hover: var(--openidea-bg-hover, rgba(255, 255, 255, 0.06));
+    --sel: var(--openidea-bg-selected, rgba(88, 166, 255, 0.18));
+    --accent: var(--openidea-accent, #4c9aff);
+    --danger: var(--openidea-danger, #e5534b);
+    --input: var(--openidea-bg-input, rgba(255, 255, 255, 0.06));
+    --font: var(--openidea-font-ui, system-ui, -apple-system, "Segoe UI", sans-serif);
+    --mono: var(--openidea-font-mono, ui-monospace, Consolas, monospace);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; flex-direction: column; font: 13px/1.45 var(--font); color: var(--fg); background: var(--bg); }
+  .bar { display: flex; align-items: center; gap: 5px; padding: 5px 6px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+  .bar .grow { flex: 1 1 auto; }
+  button { font: inherit; color: var(--fg); background: var(--input); border: 1px solid var(--border); border-radius: 5px; padding: 3px 7px; cursor: pointer; }
+  button:hover { background: var(--hover); }
+  button:active { border-color: var(--accent); }
+  button[disabled] { opacity: 0.45; cursor: default; }
+  input[type="number"] { width: 48px; font: inherit; color: var(--fg); background: var(--input); border: 1px solid var(--border); border-radius: 5px; padding: 3px 5px; }
+  .muted { color: var(--fg-muted); }
+  .wrap { flex: 1 1 auto; overflow: auto; }
+  table { width: auto; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  thead th { position: sticky; top: 0; z-index: 1; background: var(--bg); text-align: right; font-weight: 600; padding: 5px 6px; border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; white-space: nowrap; }
+  thead th:first-child { width: 120px; }
+  thead th:nth-child(3) { width: 160px; }
+  thead th:last-child { width: 160px; }
+  thead th:first-child, thead th:nth-child(2) { text-align: left; }
+  thead th:hover { color: var(--accent); }
+  thead th .arrow { font-size: 10px; margin-left: 2px; }
+  tbody td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  tbody td:first-child { font-family: var(--mono); color: var(--fg-muted); text-align: left; }
+  tbody td:nth-child(2) { text-align: left; }
+  tbody tr { cursor: grab; user-select: none; -webkit-user-select: none; }
+  tbody tr:active { cursor: grabbing; }
+  tbody tr:hover { background: var(--hover); }
+  tbody tr.sel { background: var(--sel); }
+  tbody tr.idx td { color: var(--fg-muted); }
+  tbody tr.dragging { opacity: 0.4; }
+  tbody tr.drop-before td { box-shadow: inset 0 2px 0 var(--accent); }
+  tbody tr.drop-after td { box-shadow: inset 0 -2px 0 var(--accent); }
+  .empty { padding: 24px 12px; text-align: center; color: var(--fg-muted); }
+  .foot { flex: 0 0 auto; padding: 5px 8px; border-top: 1px solid var(--border); color: var(--fg-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .foot .err { color: var(--danger); }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <button id="refresh" title="立即刷新">刷新</button>
+    <button id="add" title="添加自选股">添加</button>
+    <button id="remove" title="移除选中的股票" disabled>移除</button>
+    <span class="grow"></span>
+    <span class="muted">每</span>
+    <input id="secs" type="number" min="3" max="300" step="1" title="刷新间隔（秒，3–300）">
+    <span class="muted">秒</span>
+  </div>
+  <div class="wrap">
+    <table>
+      <thead><tr id="head"></tr></thead>
+      <tbody id="body"></tbody>
+    </table>
+    <div id="empty" class="empty" hidden>暂无自选股，点「添加」开始</div>
+  </div>
+  <div id="foot" class="foot">正在加载…</div>
+
+<script>
+  var state = {
+    rows: [], columns: [], sortCol: 0, desc: false, interval: 10,
+    timer: null, selected: null,
+    // drag & ordering state
+    orderMode: 'column',
+    dragging: false,
+    dragSymbol: null,
+    dropTarget: null,
+    dropBefore: true,
+    deferredSnapshot: null,
+    suppressClickUntil: 0,
+    pressSymbol: null, pressY: 0, moved: false
+  };
+  var tbody = document.getElementById('body');
+
+  function send(obj) {
+    if (window.openidea && window.openidea.postMessage) {
+      window.openidea.postMessage(JSON.stringify(obj));
+    }
+  }
+
+  function onMessage(text) {
+    var m;
+    try { m = JSON.parse(text); } catch (e) { return; }
+    if (m && m.type === 'snapshot') {
+      // Avoid re-rendering mid-drag (would drop the dragged row / indicator).
+      if (state.dragging) {
+        state.deferredSnapshot = m;
+      } else {
+        applySnapshot(m);
+      }
+    }
+  }
+
+  function applySnapshot(m) {
+    state.rows = Array.isArray(m.rows) ? m.rows : [];
+    state.columns = Array.isArray(m.columns) ? m.columns : ['代码', '名称', '现价', '涨跌%'];
+    var cfg = m.config || {};
+    var secs = cfg.intervalSec ? Number(cfg.intervalSec) : 10;
+    state.interval = Math.max(3, Math.min(300, secs || 10));
+    state.orderMode = cfg.orderMode === 'custom' ? 'custom' : 'column';
+    var input = document.getElementById('secs');
+    if (document.activeElement !== input) input.value = state.interval;
+    renderRows();
+    renderFoot(m);
+    restartTimer();
+  }
+
+  function renderHead() {
+    var head = document.getElementById('head');
+    head.textContent = '';
+    state.columns.forEach(function (name, col) {
+      var th = document.createElement('th');
+      th.textContent = name;
+      th.onclick = function () {
+        state.desc = state.sortCol === col ? !state.desc : false;
+        state.sortCol = col;
+        // A header click switches the plugin back to the column-sort view.
+        state.orderMode = 'column';
+        send({ type: 'sort', column: col, descending: state.desc });
+      };
+      // Sort arrow only makes sense in column mode; custom order has none.
+      if (col === state.sortCol && state.orderMode === 'column') {
+        var arrow = document.createElement('span');
+        arrow.className = 'arrow';
+        arrow.textContent = state.desc ? '▼' : '▲';
+        th.appendChild(arrow);
+      }
+      head.appendChild(th);
+    });
+  }
+
+  function renderRows() {
+    renderHead();
+    tbody.textContent = '';
+    document.getElementById('empty').hidden = state.rows.length > 0;
+    state.rows.forEach(function (row) {
+      var tr = document.createElement('tr');
+      tr.dataset.symbol = row.symbol;
+      // NOTE: do NOT set draggable=true. This WebView hands the gesture to the
+      // OS after dragstart and never emits dragover/drop. Reordering uses
+      // mousedown/mousemove/mouseup instead (see below).
+      (row.cells || []).forEach(function (cell) {
+        var td = document.createElement('td');
+        td.textContent = cell;
+        tr.appendChild(td);
+      });
+      tr.onclick = function () {
+        if (state.dragging || Date.now() < state.suppressClickUntil) return;
+        selectSymbol(row.symbol);
+      };
+      tr.ondblclick = function () {
+        if (state.dragging || Date.now() < state.suppressClickUntil) return;
+        send({ type: 'open', symbol: row.symbol });
+      };
+      tbody.appendChild(tr);
+    });
+    // Restore the highlight after a re-render.
+    if (state.selected) selectSymbol(state.selected);
+    else document.getElementById('remove').disabled = true;
+  }
+
+  function selectSymbol(symbol) {
+    state.selected = symbol;
+    var rows = tbody.querySelectorAll('tr');
+    for (var i = 0; i < rows.length; i++) {
+      rows[i].classList.toggle('sel', rows[i].dataset.symbol === symbol);
+    }
+    document.getElementById('remove').disabled = !symbol;
+  }
+
+  function clearDropMarkers() {
+    var rows = tbody.querySelectorAll('tr.drop-before, tr.drop-after');
+    for (var i = 0; i < rows.length; i++) {
+      rows[i].classList.remove('drop-before', 'drop-after');
+    }
+  }
+
+  function rowFromEvent(e) {
+    var el = e.target;
+    while (el && el !== tbody && el.tagName !== 'TR') el = el.parentNode;
+    return el && el.tagName === 'TR' && el.parentNode === tbody ? el : null;
+  }
+
+  function rowBySymbol(symbol) {
+    var rows = tbody.querySelectorAll('tr');
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].dataset.symbol === symbol) return rows[i];
+    }
+    return null;
+  }
+
+  function finishDrag() {
+    clearDropMarkers();
+    var dragging = tbody.querySelectorAll('tr.dragging');
+    for (var i = 0; i < dragging.length; i++) dragging[i].classList.remove('dragging');
+    state.dragging = false;
+    state.dragSymbol = null;
+    state.dropTarget = null;
+    // A drag often emits a trailing click; ignore clicks briefly afterwards.
+    state.suppressClickUntil = Date.now() + 300;
+  }
+
+  function applyDeferredSnapshot() {
+    if (state.deferredSnapshot) {
+      var m = state.deferredSnapshot;
+      state.deferredSnapshot = null;
+      applySnapshot(m);
+    }
+  }
+
+  // Locate the target row purely by pointer Y. Some embedded WebViews report
+  // e.target as the drag source (the ghost image swallows hit-testing), so we
+  // never rely on e.target to decide which row is under the cursor.
+  function rowAtY(clientY) {
+    var rows = tbody.querySelectorAll('tr');
+    var best = null, bestDist = Infinity;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i].getBoundingClientRect();
+      if (clientY >= r.top && clientY <= r.bottom) {
+        return { tr: rows[i], before: (clientY - r.top) < r.height / 2 };
+      }
+      var d = clientY < r.top ? r.top - clientY : clientY - r.bottom;
+      if (d < bestDist) { bestDist = d; best = rows[i]; }
+    }
+    if (!best) return null;
+    var br = best.getBoundingClientRect();
+    return { tr: best, before: clientY < br.top + br.height / 2 };
+  }
+
+  // Mouse-driven reordering. Native HTML5 DnD is unusable in this WebView
+  // (dragstart fires but dragover/drop are swallowed). We implement the whole
+  // gesture ourselves: press on a row -> move past a small threshold -> release.
+  var DRAG_THRESHOLD = 4; // px of vertical travel before a press becomes a drag
+
+  tbody.addEventListener('mousedown', function (e) {
+    if (e.button !== 0) return; // left button only
+    var tr = rowFromEvent(e);
+    if (!tr || !tr.dataset.symbol) return;
+    state.pressSymbol = tr.dataset.symbol;
+    state.pressY = e.clientY;
+    state.moved = false;
+  });
+
+  // Move/up are bound on document so the gesture keeps tracking even when the
+  // pointer leaves the row/table mid-drag.
+  document.addEventListener('mousemove', function (e) {
+    if (!state.pressSymbol) return;
+    if (!state.moved) {
+      if (Math.abs(e.clientY - state.pressY) < DRAG_THRESHOLD) return;
+      state.moved = true;
+      state.dragging = true;
+      state.dragSymbol = state.pressSymbol;
+      var src = rowBySymbol(state.dragSymbol);
+      if (src) src.classList.add('dragging');
+    }
+    if (!state.dragging) return;
+    var hit = rowAtY(e.clientY);
+    clearDropMarkers();
+    if (hit && hit.tr.dataset.symbol) {
+      hit.tr.classList.add(hit.before ? 'drop-before' : 'drop-after');
+      state.dropTarget = hit.tr.dataset.symbol;
+      state.dropBefore = hit.before;
+    } else {
+      state.dropTarget = null;
+    }
+  });
+
+  window.addEventListener('mouseup', function (e) {
+    if (!state.pressSymbol) return;
+    var wasDragging = state.dragging;
+    // Clear press state first so a plain click still reaches row onclick.
+    state.pressSymbol = null;
+    state.pressY = 0;
+    if (!wasDragging) {
+      state.moved = false;
+      return;
+    }
+    e.preventDefault();
+    var hit = rowAtY(e.clientY);
+    var target = hit && hit.tr.dataset.symbol ? hit.tr.dataset.symbol : state.dropTarget;
+    var before = hit ? hit.before : state.dropBefore;
+    var from = -1, to = -1;
+    for (var i = 0; i < state.rows.length; i++) {
+      if (state.rows[i].symbol === state.dragSymbol) from = i;
+      if (target && state.rows[i].symbol === target) to = i;
+    }
+    if (from >= 0 && to >= 0 && to !== from) {
+      var moved = state.rows.splice(from, 1)[0];
+      if (to > from) to -= 1;
+      var insertAt = before ? to : to + 1;
+      state.rows.splice(insertAt, 0, moved);
+      var order = state.rows.map(function (r) { return r.symbol; });
+      renderRows();
+      // The plugin answers `reorder` with a fresh publish carrying both the
+      // new order and latest quotes. Drop any snapshot buffered mid-drag —
+      // it holds the OLD order and would otherwise flash the rows back.
+      state.deferredSnapshot = null;
+      send({ type: 'reorder', order: order });
+    }
+    state.moved = false;
+    finishDrag();
+    applyDeferredSnapshot();
+  });
+
+  // If focus is lost mid-drag (mouse released outside the WebView), cancel
+  // cleanly so a stale pressSymbol doesn't hijack the next click.
+  window.addEventListener('blur', function () {
+    if (!state.pressSymbol) return;
+    state.pressSymbol = null;
+    state.pressY = 0;
+    state.moved = false;
+    if (state.dragging) { finishDrag(); applyDeferredSnapshot(); }
+  });
+
+  function renderFoot(m) {
+    var foot = document.getElementById('foot');
+    foot.textContent = '';
+    var parts = [];
+    if (m.source) parts.push(m.source);
+    if (m.clock) parts.push(m.clock);
+    if (typeof m.ageSec === 'number' && m.ageSec >= 0) parts.push(m.ageSec + 's 前');
+    foot.appendChild(document.createTextNode(parts.join(' · ') || '未拉取'));
+    if (m.error) {
+      var err = document.createElement('span');
+      err.className = 'err';
+      err.textContent = ' · ' + m.error;
+      foot.appendChild(err);
+    }
+  }
+
+  function restartTimer() {
+    if (state.timer) clearInterval(state.timer);
+    state.timer = setInterval(function () { send({ type: 'refresh' }); }, state.interval * 1000);
+  }
+
+  document.getElementById('refresh').onclick = function () { send({ type: 'refresh' }); };
+  document.getElementById('add').onclick = function () { send({ type: 'add' }); };
+  document.getElementById('remove').onclick = function () {
+    if (state.selected) send({ type: 'remove', symbol: state.selected });
+  };
+  document.getElementById('secs').onchange = function (e) {
+    var v = Math.max(3, Math.min(300, Number(e.target.value) || 10));
+    e.target.value = v;
+    state.interval = v;
+    restartTimer();
+    send({ type: 'prefs', intervalSec: v });
+  };
+
+  if (window.openidea && window.openidea.onMessage) {
+    window.openidea.onMessage(onMessage);
+  }
+  renderHead();
+  send({ type: 'hello' });
+</script>
+</body>
+</html>

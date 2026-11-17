@@ -1,6 +1,6 @@
 # OpenIDEA 股票行情插件 — 设计方案（v0.3 · 定稿：原生表格、无红绿）
 
-> 状态：**M0–M6 已实现，55 个单测通过，官方 `build`/`check` 通过，已 `link` 到本机 IDE**。新增「15 s 活动心跳」以更快看到价格变化（60 s 后台下限不变），见 §6.5。添加交互改为**面板内结果列表**（单标签不变、不弹第二个对话框）；API 1.3 无 type-ahead，关键词需提交一次，见 §6.4。按用户反馈，行情页**退回原生 `sortable_table`、去掉红绿配色**，并修复「不自动刷新 / 无法选中」问题（根因：HTML 帧在部分 IDE 构建里不随 `refresh_view` 重绘、消息桥不通）。后续又修复：自动刷新被节流/非法 `on-schedule:15` 吞掉、添加时改为联想接口模糊搜索、删除改为选中行即确认、图标换名。**模糊搜索必须用 `searchapi` 联想接口，`clist/get` 不支持 keyword**（实测会静默忽略并返回全市场首页）。所有 API 标识符均按 **tag `v0.1.39`** 的源码逐字核对（该标签 `wit/plugin.wit` 为 `openidea:plugin@1.3.0`，SDK `API_VERSION = "1.3"`）。执行记录见附录 A–E。
+> 状态：**M0–M6 已实现，53 个单测通过（v0.2.0 起数据源为腾讯财经，见 §6.8）**，官方 `build`/`check` 通过，已 `link` 到本机 IDE。新增「15 s 活动心跳」以更快看到价格变化（60 s 后台下限不变），见 §6.5。添加交互改为**面板内结果列表**（单标签不变、不弹第二个对话框）；API 1.3 无 type-ahead，关键词需提交一次，见 §6.4。按用户反馈，行情页**退回原生 `sortable_table`、去掉红绿配色**，并修复「不自动刷新 / 无法选中」问题（根因：HTML 帧在部分 IDE 构建里不随 `refresh_view` 重绘、消息桥不通）。后续又修复：自动刷新被节流/非法 `on-schedule:15` 吞掉、添加时改为联想接口模糊搜索、删除改为选中行即确认、图标换名。**模糊搜索必须用 `searchapi` 联想接口，`clist/get` 不支持 keyword**（实测会静默忽略并返回全市场首页）。所有 API 标识符均按 **tag `v0.1.39`** 的源码逐字核对（该标签 `wit/plugin.wit` 为 `openidea:plugin@1.3.0`，SDK `API_VERSION = "1.3"`）。执行记录见附录 A–E。
 
 ## 0. 已确认的决策
 
@@ -9,7 +9,7 @@
 | ① | `engines.openidea = "^1.3"` | 必须整体锁定 `v0.1.39` 的 SDK 与 CLI（main 是 1.4.0，`check` 会拒绝比宿主新的 minor） |
 | ⑥ | A 股 MVP + **原生表格、纯文本、无红绿** | 原生 `Table` 单元格只有 `Vec<String>`、无 per-cell 样式 → 直接用 `Body::sortable_table`，放弃 `Body::Html` 彩色帧；方向以 `▲▼` 与 `+/-` 传达 |
 | 回退原因 | HTML 帧在真实 IDE 中**不随 `refresh_view` 重绘、消息桥不通** | 导致「不自动刷新 / 点不中」，故回退到宿主侧重绘的原生表格（文档化、最可靠路径） |
-| 其余 | 按 v0.1 默认 | 60 s 刷新、双源降级、storage 唯一真相源、权限最小化 |
+| 其余 | 按 v0.1 默认 | 60 s 刷新、单源（腾讯）、storage 唯一真相源、权限最小化 |
 
 ---
 
@@ -289,6 +289,65 @@ openidea-plugin index market/ --publisher absolutelyzero --name "absolutelyZero"
 - **仍待用户执行**：把签名包作为 `v0.1.0` Release 附件上传；向 `l0ng-ai/openidea-plugins` 提 PR（需 fork）。本机无 `gh` CLI 与 GitHub token，且按权限边界不从 credential manager 提取凭据代发；Release API/PR 属需用户身份的外发动作。
 - **风险**：registry CI 用**最新 release（v0.1.40 / API 1.4）** 的 CLI 跑 `check`，而本包由 0.1.39 / API 1.3 构建；文档称已发布的 1.3 插件继续可用，但本地 Windows 无法闭环验证，需在 CI 结果中确认。签名包内容一旦发布不可改，只能发新版本。
 - **2026-11-10 改 publisher**：将发布者从模板占位 `acme` 改为真实发布者 `absolutelyzero`（与 GitHub 用户名一致）。已改 `plugin.toml` 的 `id` 前缀、`src/lib.rs` 测试上下文、`DESIGN.md` 示例；重新 `keygen`（新公钥 `lQ9T2cTXJkKXSX/wIZVsGMeCdifSrBBNDZiHItH5bvU=`）+ `pack --publisher absolutelyzero` 生成新签名包 `absolutelyzero.stock-ticker-0.1.0.oiplugin`（SHA `a4175d19d258cf87737142ebfb751610a6f09fb3311c149e9eb153a7d782669d`）；PR 草稿改为 `publishers/absolutelyzero.toml`、`plugins/absolutelyzero.stock-ticker.toml`。上一条 `0f42f6d`/tag `v0.1.0` 为 acme 版，本次将重新提交并把 tag 移动到新 commit。
+
+---
+
+## 6.8 数据源切换到腾讯财经（2026-11-16，v0.2.0）
+
+- **动机**：上线前实测（2026-11-16）同一时段 `push2.eastmoney.com` 返回 `HTTP 000`（TLS 连接被中断），腾讯 `qt.gtimg.cn` 稳定（单只 540 B / 0.11 s；30 只 15,408 B / 0.14 s；连续 20 次全部 200）。
+- **改动**：行情改 `https://qt.gtimg.cn/q=<sh|sz|bj><code>,…`（GBK 文本、`~` 分隔）；检索改 `https://proxy.finance.qq.com/ifzqgtimg/appstock/smartbox/search/get?q=…`（UTF-8 JSON，`data.stock` 最多 50 条，仅保留 `GP-A`）。能力由 3 个东财 host 收敛为 2 个腾讯 host；`DisplayConfig.source` 与设置页「数据源」项移除。
+- **检索接口为何不用 `smartbox.gtimg.cn/s3/`**：实测「银行」只返回 10 条 ETF、`t=gp-a` 无结果；JSON 接口同一词返回 50 条含中国银行/宁波银行等 `GP-A`。
+- **内部 secid 不变**：仍用 `market.code`（`1.600519` / `0.000001`），仅在 `sync.rs` / `quote.rs` 边界与 `sh`/`sz`/`bj` 互转，`model::normalize`、持久化结构与 UI 均不受影响。
+- **字段索引**（真实样本确认）：`[1]名称 [2]代码 [3]现价 [4]昨收 [5]今开 [6]量 [30]时间 [31]涨跌 [32]涨跌幅 [33]最高 [34]最低 [37]成交额(万)`。
+- **GBK 解码**：使用 `encoding_rs::GBK`。实测 wasm 由 331,406 B 增至 484,456 B（**+153,050 B / +46.2%**），超过 design 预设的 60 KB 阈值；评估后接受——换取完整 GBK 覆盖、避免生僻字乱码，484 KB 仍远低于常见插件体积上限。若后续需要压缩，可改用预生成字表。
+- **单源风险**：东财已全部移除；腾讯不可用时只提示并保留上次快照（失败不覆盖 `snapshot`）。后续可评估 API 1.6 的 host-owned WebSocket 作为第二条通道。
+- **验证**：`cargo test` **53 passed**；`openidea-plugin build` + `check` **ok**；能力为 `storage` / `events` / `net:qt.gtimg.cn` / `net:proxy.finance.qq.com`。
+- **未验证**：IDE 内 Reload 后的首次授权弹窗与真实行情显示（需人工目视）。
+
+## 6.9 `on-schedule` 的真实行为（2026-11-16 源码核实）
+
+- **现象**：0.2.1 Reload 后状态行一直显示 `7 只 · 腾讯行情 · 13:47:04 · 0s 前`，行情时钟不再前进。
+- **根因（宿主源码）**：`v0.1.39` 的 `crates/ide-host/src/plugins/mod.rs:2099–2108`：
+  ```rust
+  let next = *meta.next_schedule.get_or_insert(now + every);
+  if next > now { false } else {
+      meta.next_schedule = Some(now + every);
+      meta.status == PluginStatus::Inactive && meta.pending.is_empty()
+  }
+  ```
+  `due` 要求 **`status == Inactive`**。视图打开时插件是 Active，到点只重置 `next_schedule`，**不投递 `Event::Scheduled`**。所以「60 s 后台刷新」在面板可见时不成立——这是宿主行为，不是插件缺陷。
+- **实际刷新间隔**：打开面板且无操作时约 **5–6 分钟**（5 分钟 idle 回收 → 下一次 schedule 激活并投递一次）。
+- **0.2.2 的应对**（不改变 60 s 下限，仍 `^1.3`）：
+  - `handle_events`：任何被投递的事件（`editor-focused` / `file-saved` / `files-changed` / `vcs-changed` / `file-opened` …）都视为刷新机会，仍受 15 s 节流；`Scheduled` 分支保留（回收后仍会来）。
+  - `activate`：数据陈旧（≥90 s）且有自选股时立即刷新，避免 Reload/首开等待。
+  - `activation` 追加 `on-event:files-changed`，让持续编辑也能驱动心跳。
+  - 状态行加入行情时钟 `HH:MM:SS`，刷新是否发生一眼可辨。
+- **真正实时**：只有 API 1.6 的 host-owned WebSocket（`websocket-ready` 是普通事件，会投递给存活实例）能绕开该限制；见 2026-11-16 协议调研。
+- **文档修正**：此前 README/DESIGN 中「`on-schedule:60` 是保证的后台定时器」的表述不准确，已改正。
+
+## 6.10 行情面板改为 WebView + 页面定时器（2026-11-16，v0.3.0）
+
+- **问题**：面板可见时无法周期刷新。`on-schedule` 只在插件 `Inactive` 时投递（`mod.rs:2106`），存活实例只重置计时器。
+- **参照**：`jiusi666/openidea-stock-watch` 的 `activation` 没有 `on-schedule`，视图是 `views[].web = "web/index.html"`，页面 `setInterval`（默认 10 s，clamp 3–300）经 `openidea.postMessage` 让插件取数、`host::post_view_message` 回推。
+- **改动**：
+  - `plugin.toml`：`[[contributes.views]] web = "web/index.html"`；`activation = ["on-view:watchlist"]`（移除 `on-schedule` 与 `on-event:*`）；`required = ["storage"]`（移除 `events`）。
+  - `lib.rs`：`render` 返回占位 `View::message`；`handle` 只处理 `ViewEvent::Message`，分发 `hello/refresh/sort/open/remove/add/prefs`；`publish` 改为推送 `snapshot` JSON（已格式化行 + config + source + clock + age + error）；`run_command` 保留，`add` 改为「代码直加 / 单结果直加 / 多结果 pick」。
+  - `web/index.html`：4 列表格、表头排序、点击选中、双击打开、工具栏（刷新/添加/移除/间隔）、页脚行情时钟与错误；`setInterval` 驱动刷新。
+- **验证**：先用独立探针视图（`webprobe`）确认 `postMessage → pong` 往返成功，再替换主视图；`cargo test` 34 passed（UI 测试改为消息协议测试）；`build` + `check` ok。
+- **能力变化**：`events` 移除（`^1.3` 下无必要），`storage` + 2 个 `net:` 不变。
+- **限制**：WebView 无网络访问，所有取数必须经插件转发；视图隐藏时定时器可能被宿主降频（可接受，恢复可见后会补一次）。
+- **与此前 `Body::Html` 失败的区别**：`Body::Html` 是 render 返回的 body 帧；`views[].web` 是独立页面 + 消息桥，两者机制不同。
+
+## 6.11 拖拽调整自选股顺序（2026-11-16，v0.3.1）
+
+- **需求**：用户可拖拽行定义自选股先后；拖拽结果作为权威顺序持久化；表头列排序降级为「临时视图」，不改底层顺序。
+- **用户确认的范围**：拖拽「行顺序」（非列宽/列顺序）；「拖拽改底层顺序并持久化，列排序仅作临时视图」；顺序持久化（刷新/重启/重载保留）。
+- **视图模式**：`State.order_mode: OrderMode`（`column` / `custom`），存 `order-mode.v1`（`"column"`/`"custom"`），缺失回退 `column`（旧版升级不改可见行为）。`ordered_rows` 在 `custom` 模式直接按 `watch` 数组顺序输出、跳过排序；`column` 模式维持原排序。
+- **消息协议**：页面 drop 后按 DOM 顺序发 `{"type":"reorder","order":[symbol,…]}`；插件端 `reorder_watch` 按列表重排 `watch`（重复/未知 symbol 忽略，未列出项按原相对顺序追加末尾，绝不产生重复行），写回 `watch.v1`、切 `custom` 并保存、重新 `publish`。`sort` 消息同时切回 `column`（不改 `watch`）。快照 `config.orderMode` 告知页面当前模式。
+- **页面交互**（`web/index.html`）：HTML5 DnD（draggable + dragstart/dragover/drop/dragend 委托在 tbody），插入位置指示（`drop-before`/`drop-after` 的 inset box-shadow）；拖到自己/无目标为 no-op；拖拽期间收到刷新快照先存 `deferredSnapshot`，dragend/drop 后统一应用，避免重绘打断；`suppressClickUntil` 时间窗防止拖拽尾随 click 误选中/误打开；`custom` 模式不显示排序箭头；重绘后按 symbol 恢复选中高亮。
+- **验证**：新增 7 个 Rust 单测（模式持久化/回退、custom 顺序、reorder 重排与去重、sort 不改底层、快照携带模式），`cargo test` = **41 passed**；JS `node --check` 通过；重排索引算法 7/7 逻辑用例通过；wasm 构建通过。
+- **待人工**：IDE（0.1.45）内目视验证拖拽、插入指示、刷新不打断、重载后顺序保留（apply 任务 3.3）。
+- **能力变化**：无（仍 `storage` + 2 个 `net:`）。OpenSpec 变更 `drag-reorder-watchlist` 新增独立能力 `ui/watchlist-reorder`。
 
 ---
 

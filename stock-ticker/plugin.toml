@@ -1,21 +1,21 @@
 id = "absolutelyzero.stock-ticker"
 name = "Stock Ticker"
-version = "0.1.0"
-description = "A-share quotes in a native side tool window, with fuzzy symbol search and activity-throttled refresh."
+version = "0.3.2"
+description = "A-share quotes in a WebView side panel, with fuzzy symbol search, page-timer refresh and drag-to-reorder."
 authors = ["absolutelyZero"]
 license = "MIT"
 homepage = "https://github.com/absolutelyZero/openidea-plugin-stock-ticker"
-change-notes = "0.1.0 — first release: watchlist quotes, fuzzy add, 15 s activity heartbeat."
+change-notes = "0.3.2 — 修复 WebView 内拖拽排序：改用鼠标手势实现，兼容宿主对原生拖拽事件的拦截；表头列排序为不改底层顺序的临时视图。"
 categories = ["tools"]
 icon = "icon.svg"
 icon-dark = "icon_dark.svg"
 engines.openidea = "^1.3"
 wasm = "dist/plugin.wasm"
-activation = ["on-view:watchlist", "on-schedule:60", "on-event:editor-focused", "on-event:file-saved"]
+activation = ["on-view:watchlist"]
 
 [capabilities]
-required = ["storage", "events"]
-optional = ["net:push2.eastmoney.com", "net:push2delay.eastmoney.com", "net:searchapi.eastmoney.com"]
+required = ["storage"]
+optional = ["net:qt.gtimg.cn", "net:proxy.finance.qq.com"]
 
 [[contributes.commands]]
 id = "refresh"
@@ -53,6 +53,7 @@ id = "watchlist"
 title = "行情"
 location = "right"
 group = "stock"
+web = "web/index.html"
 
 [[contributes.statusBar]]
 id = "index"

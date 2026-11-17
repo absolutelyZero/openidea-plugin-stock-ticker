@@ -1,43 +1,45 @@
-//! Quote fetching with a backup source, task budget, alerting and graceful
-//! degradation. Nothing here runs during `render()`.
+//! Quote fetching from Tencent's public `qt.gtimg.cn` endpoint, with a task
+//! budget, alerting and graceful degradation. Nothing here runs during
+//! `render()`.
 
 use crate::{
-    model::{Quote, Snapshot, INDEX_SECIDS},
+    model::{Quote, Snapshot},
     state::{now_secs, State},
 };
 use openidea_plugin::{
     Error, HttpRequest, NotificationAction, NotificationLevel, host,
 };
 
-const FIELDS: &str = "f2,f3,f4,f5,f6,f12,f13,f14,f15,f16,f17,f18,f124";
+const QUOTE_HOST: &str = "qt.gtimg.cn";
+const SOURCE_LABEL: &str = "腾讯行情";
+/// A non-forced refresh is skipped while the last attempt is this recent.
+const THROTTLE_SECS: i64 = 55;
 
-fn build_secids(state: &State) -> Vec<String> {
-    let mut ids: Vec<String> = state.watch.iter().map(|w| w.symbol.clone()).collect();
-    if state.config.show_indices {
-        ids.extend(INDEX_SECIDS.iter().map(|s| (*s).to_string()));
+/// `market.code` secid → the `sh`/`sz`/`bj` code `qt.gtimg.cn` expects.
+fn tencent_code(secid: &str) -> Option<String> {
+    let (market, code) = secid.split_once('.')?;
+    if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
     }
+    let prefix = match market {
+        "1" => "sh",
+        // Beijing listings share the 0. channel in the stored secid.
+        "0" if code.starts_with('4') || code.starts_with('8') => "bj",
+        "0" => "sz",
+        _ => return None,
+    };
+    Some(format!("{prefix}{code}"))
+}
+
+fn build_codes(state: &State) -> Vec<String> {
+    let mut ids: Vec<String> = state.watch.iter().map(|w| w.symbol.clone()).collect();
     let mut seen = std::collections::BTreeSet::new();
     ids.retain(|s| seen.insert(s.clone()));
-    ids
+    ids.iter().filter_map(|s| tencent_code(s)).collect()
 }
 
-fn build_url(host_name: &str, secids: &[String]) -> String {
-    format!(
-        "https://{host_name}/api/qt/ulist.np/get?fltt=2&invt=2&secids={}&fields={FIELDS}",
-        secids.join(",")
-    )
-}
-
-fn hosts(state: &State) -> [&'static str; 2] {
-    if state.config.source == "delayed" {
-        ["push2delay.eastmoney.com", "push2.eastmoney.com"]
-    } else {
-        ["push2.eastmoney.com", "push2delay.eastmoney.com"]
-    }
-}
-
-fn label(host_name: &str) -> &'static str {
-    if host_name.starts_with("push2delay") { "东财备源" } else { "东财主源" }
+fn build_url(codes: &[String]) -> String {
+    format!("https://{QUOTE_HOST}/q={}", codes.join(","))
 }
 
 fn check_alerts(state: &State) {
@@ -67,11 +69,11 @@ fn check_alerts(state: &State) {
 /// return `Ok(())` so the command does not count as failed.
 pub fn sync(state: &mut State, force: bool) -> Result<(), Error> {
     let now = now_secs();
-    if !force && now.saturating_sub(state.meta.last_fetch_at) < 55 {
+    if !force && now.saturating_sub(state.meta.last_fetch_at) < THROTTLE_SECS {
         return Ok(());
     }
-    let secids = build_secids(state);
-    if secids.is_empty() {
+    let codes = build_codes(state);
+    if codes.is_empty() {
         state.meta.last_error = Some("自选股为空".into());
         let _ = state.save_meta();
         crate::publish(state);
@@ -81,43 +83,35 @@ pub fn sync(state: &mut State, force: bool) -> Result<(), Error> {
     let task = host::begin_task("刷新行情", true);
     task.report(0, Some(3), Some("请求行情"));
 
-    let mut outcome: Option<(&'static str, Vec<Quote>)> = None;
+    if task.is_cancelled() {
+        return Ok(());
+    }
+
+    let request = HttpRequest {
+        timeout_ms: Some(4000),
+        ..HttpRequest::get(&build_url(&codes)).header("Accept", "text/plain")
+    };
+
+    let mut outcome: Option<Vec<Quote>> = None;
     let mut last_error: Option<String> = None;
-    for host_name in hosts(state) {
-        if task.is_cancelled() {
-            return Ok(());
+    match host::fetch(&request) {
+        Ok(response) if response.status == 200 => {
+            match crate::quote::parse_tencent(&response.body) {
+                Ok(quotes) => outcome = Some(quotes),
+                Err(e) => last_error = Some(format!("腾讯行情解析失败：{e}")),
+            }
         }
-        let request = HttpRequest {
-            timeout_ms: Some(4000),
-            ..HttpRequest::get(&build_url(host_name, &secids))
-                .header("Accept", "application/json")
-        };
-        match host::fetch(&request) {
-            Ok(response) if response.status == 200 => {
-                match crate::quote::parse_eastmoney(&response.body) {
-                    Ok(quotes) => {
-                        outcome = Some((host_name, quotes));
-                        break;
-                    }
-                    Err(e) => last_error = Some(format!("{} 解析失败：{e}", label(host_name))),
-                }
-            }
-            Ok(response) => {
-                last_error = Some(format!("{} HTTP {}", label(host_name), response.status))
-            }
-            Err(Error::Denied(cap)) => {
-                last_error = Some(format!("网络权限未授予（{cap}）"));
-            }
-            Err(Error::Cancelled) => return Ok(()),
-            Err(e) => last_error = Some(format!("{}：{e}", label(host_name))),
-        }
+        Ok(response) => last_error = Some(format!("腾讯行情 HTTP {}", response.status)),
+        Err(Error::Denied(cap)) => last_error = Some(format!("网络权限未授予（{cap}）")),
+        Err(Error::Cancelled) => return Ok(()),
+        Err(e) => last_error = Some(format!("腾讯行情：{e}")),
     }
 
     match outcome {
-        Some((host_name, quotes)) => {
+        Some(quotes) => {
             state.snapshot = Some(Snapshot {
                 fetched_at: now,
-                source: label(host_name).to_string(),
+                source: SOURCE_LABEL.to_string(),
                 quotes,
             });
             state.meta.last_fetch_at = now;
@@ -143,54 +137,48 @@ pub fn sync(state: &mut State, force: bool) -> Result<(), Error> {
 mod tests {
     use super::*;
     use crate::model::WatchItem;
+    use encoding_rs::GBK;
     use openidea_plugin::{HttpResponse, mock::MockHost};
 
-    const GOOD: &str = r#"{"data":{"diff":[
-      {"f12":"600519","f13":1,"f14":"贵州茅台","f2":1520.0,"f3":1.33,"f4":20.0,"f18":1500.0},
-      {"f12":"000001","f13":1,"f14":"上证指数","f2":3100.5,"f3":0.82,"f18":3075.0}
-    ]}}"#;
+    fn gbk(s: &str) -> Vec<u8> {
+        let (bytes, _, _) = GBK.encode(s);
+        bytes.into_owned()
+    }
+
+    fn good() -> Vec<u8> {
+        gbk(concat!(
+            "v_sh600519=\"1~贵州茅台~600519~1438.55~1435.26~1426.30~18370~10067~8302~",
+            "1438.55~1~1438.54~1~1438.45~1~1438.44~1~1438.34~1~1439.00~3~1439.04~1~",
+            "1439.20~1~1439.50~3~1439.55~1~~20261116113253~3.29~0.23~1445.60~1425.00~",
+            "1438.55/18370/2640163153~18370~264016~0.15~21.89\";",
+            "v_sh000001=\"1~上证指数~000001~3620.00~3634.35~3611.54~277036290~0~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~~20261116113200~-14.35~-0.39~3623.12~3593.45~3620.00/277036290/421756737368~277036290~42175674~0.57~16.50\";"
+        ))
+    }
 
     fn mock() -> MockHost {
         MockHost::install().with_capabilities(&[
             "storage",
             "events",
-            "net:push2.eastmoney.com",
-            "net:push2delay.eastmoney.com",
+            "net:qt.gtimg.cn",
         ])
     }
 
     #[test]
-    fn builds_one_batched_request_with_indices() {
+    fn builds_one_batched_request_for_the_watchlist() {
         let h = mock();
         let mut s = State::load();
         s.watch.push(WatchItem { symbol: "1.600519".into(), ..Default::default() });
-        h.on_fetch(|_| Ok(HttpResponse { status: 200, headers: vec![], body: GOOD.as_bytes().to_vec() }));
+        h.on_fetch(|_| Ok(HttpResponse { status: 200, headers: vec![], body: good() }));
         sync(&mut s, true).unwrap();
         let requests = h.requests();
         assert_eq!(requests.len(), 1);
-        assert!(requests[0].url.starts_with("https://push2.eastmoney.com/"));
-        assert!(requests[0].url.contains("1.600519"));
-        assert!(requests[0].url.contains("1.000001"));
+        assert!(requests[0].url.starts_with("https://qt.gtimg.cn/q="), "url: {}", requests[0].url);
+        assert!(requests[0].url.contains("sh600519"));
+        assert!(!requests[0].url.contains("sh000001"), "indices are no longer fetched");
         assert_eq!(requests[0].timeout_ms, Some(4000));
         assert_eq!(s.snapshot.as_ref().unwrap().quotes.len(), 2);
+        assert_eq!(s.snapshot.as_ref().unwrap().source, "腾讯行情");
         assert_eq!(s.meta.failures, 0);
-    }
-
-    #[test]
-    fn falls_back_to_the_secondary_host() {
-        let h = mock();
-        let mut s = State::load();
-        s.watch.push(WatchItem { symbol: "1.600519".into(), ..Default::default() });
-        h.on_fetch(|req| {
-            if req.url.contains("push2delay") {
-                Ok(HttpResponse { status: 200, headers: vec![], body: GOOD.as_bytes().to_vec() })
-            } else {
-                Ok(HttpResponse { status: 503, headers: vec![], body: vec![] })
-            }
-        });
-        sync(&mut s, true).unwrap();
-        assert_eq!(h.requests().len(), 2);
-        assert_eq!(s.snapshot.as_ref().unwrap().source, "东财备源");
     }
 
     #[test]
@@ -203,10 +191,21 @@ mod tests {
             source: "旧缓存".into(),
             quotes: vec![],
         });
-        h.on_fetch(|_| Ok(HttpResponse { status: 200, headers: vec![], body: b"not json".to_vec() }));
+        h.on_fetch(|_| Ok(HttpResponse { status: 200, headers: vec![], body: b"not a quote".to_vec() }));
         sync(&mut s, true).unwrap();
         assert_eq!(s.snapshot.as_ref().unwrap().source, "旧缓存");
         assert!(s.status_text().contains("解析失败"));
+    }
+
+    #[test]
+    fn http_error_keeps_the_previous_snapshot_and_reports_status() {
+        let h = mock();
+        let mut s = State::load();
+        s.watch.push(WatchItem { symbol: "1.600519".into(), ..Default::default() });
+        h.on_fetch(|_| Ok(HttpResponse { status: 503, headers: vec![], body: vec![] }));
+        sync(&mut s, true).unwrap();
+        assert!(s.snapshot.is_none());
+        assert!(s.status_text().contains("503"));
     }
 
     #[test]
@@ -224,7 +223,7 @@ mod tests {
         let h = mock();
         let mut s = State::load();
         s.watch.push(WatchItem { symbol: "1.600519".into(), ..Default::default() });
-        h.on_fetch(|_| Ok(HttpResponse { status: 200, headers: vec![], body: GOOD.as_bytes().to_vec() }));
+        h.on_fetch(|_| Ok(HttpResponse { status: 200, headers: vec![], body: good() }));
         sync(&mut s, true).unwrap();
         sync(&mut s, false).unwrap();
         assert_eq!(h.requests().len(), 1);
@@ -236,10 +235,10 @@ mod tests {
         let mut s = State::load();
         s.watch.push(WatchItem {
             symbol: "1.600519".into(),
-            above: Some(1500.0),
+            above: Some(1400.0),
             ..Default::default()
         });
-        h.on_fetch(|_| Ok(HttpResponse { status: 200, headers: vec![], body: GOOD.as_bytes().to_vec() }));
+        h.on_fetch(|_| Ok(HttpResponse { status: 200, headers: vec![], body: good() }));
         sync(&mut s, true).unwrap();
         assert_eq!(h.notifications_with_actions().len(), 1);
         sync(&mut s, true).unwrap();

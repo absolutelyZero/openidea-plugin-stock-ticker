@@ -106,7 +106,7 @@ jobs:
           openidea-plugin pack . \
             --key "$keyfile" \
             --publisher "${{ env.PUBLISHER }}" \
-            --out "${{ env.PUBLISHER }}.${{ env.PLUGIN_ID }}-${{ steps.ver.outputs.version }}.oiplugin"
+            --out "../${{ env.PUBLISHER }}.${{ env.PLUGIN_ID }}-${{ steps.ver.outputs.version }}.oiplugin"
 
       - name: Verify signed package
         shell: bash

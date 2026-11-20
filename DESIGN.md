@@ -381,7 +381,7 @@ openidea-plugin index market/ --publisher absolutelyzero --name "absolutelyZero"
 - **未改**：`change-notes` 仍只描述 0.4.5 本身（视图图标），跨版本历史留给 README / 本节。
 - **验证**：`openidea-plugin check` **ok**（0.4.5，509.8 KiB，API 1.3，能力 4 项）。
 - **发布**：`v0.4.5` 标签推送后 `release.yml` 自动构建并签名，Release 已生成 `absolutelyzero.stock-ticker-0.4.5.oiplugin`（282,323 B，sha256 `af268133e3040ca19e4ebb734b4f234f6e2565db918c41ac81f887b18c6557fc`）；本地下载该签名包复核 `check` **ok**，包内 `plugin.toml` 的 `description` 确为新文案，说明文案已随包分发而非只存在于仓库。
-- **市场**：registry 条目（`.workbuddy/tmp/registry-pr/plugins/absolutelyzero.stock-ticker.toml`）与线上对齐（0.1.0 + 0.3.2）后追加 0.4.5；PR 由用户在 `absolutelyZero/openidea-plugins` 提交（本机无 GitHub 凭据，按权限边界不代传）。
+- **市场**：条目改动直接在本地 registry clone（`D:/minipro/openidea-plugins`）完成——从 `upstream/main`（`1d748ea`）拉 `release-0.4.5` 分支，在 0.3.2 之后追加 0.4.5，提交 `96cba82` 并推到 fork。校验：`python -m unittest discover -s scripts` 15 passed，`registry.py validate --base upstream/main --author absolutelyZero` 通过（exit 0），远程分支文件经 API 复核含 0.4.5 与正确 sha256。PR 待用户在 compare 页点 Create。
 
 ---
 

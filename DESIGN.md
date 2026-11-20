@@ -373,6 +373,14 @@ openidea-plugin index market/ --publisher absolutelyzero --name "absolutelyZero"
 - **验证**：`openidea-plugin check` **ok**；`pack`（未签名）产出的包内含 `view.svg`（9 个文件），说明素材确实随包分发；用 Qt `QSvgRenderer` 在 `#1E1F22` / `#F4F6F9` 两种栏底色下按 16 / 20 / 24 / 32 px 渲染核对，最小尺寸仍可辨「柱 + 红线上扬 + 端点」。
 - **版本**：0.4.5（仅 manifest 与素材变化，`dist/plugin.wasm` 未变）。
 
+## 6.14 市场文案改写与 0.4.5 上架（2026-11-20）
+
+- **动机**：README 开篇是内部开发状态（"Status: **M0–M5 implemented and validated**…visual verification still needs a human"），`description` 也只有一句英文；而市场页展示的正是这两处。0.4.x 系列（分时图、拖拽排序、搜索）此前未上架，registry 仍停在 0.3.2，用户首次看到的就是这段内部语气。
+- **`plugin.toml` `description`**：改为中文一句话，覆盖四列报价 / 悬停分时 / 模糊搜索 / 拖拽排序 / 面板内刷新五个卖点（`openidea-plugin check` 接受中文，无长度限制报错）。
+- **README 开篇**：新增面向使用者的简介与 6 条功能要点（`▲▼`+`±` 表达涨跌、悬停分时且移出即收起、代码/名称/拼音添加、拖拽顺序持久化、10 s 默认定时刷新、能力克制与降级），补一段数据来源免责（腾讯公开接口，分时非官方不保证可用，失败保留旧行情），再补「技术说明」（WebView 页面 + 页面内计时器 + API 1.3/vendored SDK）。原内部状态段降级为文末 `## Development status`，内容保留。
+- **未改**：`change-notes` 仍只描述 0.4.5 本身（视图图标），跨版本历史留给 README / 本节。
+- **验证**：`openidea-plugin check` **ok**（0.4.5，509.8 KiB，API 1.3，能力 4 项）。
+
 ---
 
 ## 7. 生命周期与时序

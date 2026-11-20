@@ -1,17 +1,30 @@
-# Stock Ticker (OpenIDEA plugin)
+# Stock Ticker · A 股行情侧边栏
 
-A-share quotes in a single WebView side panel. API 1.3 (`engines.openidea = "^1.3"`).
+在 OpenIDEA 右侧边栏盯盘：自选股报价一眼看完，鼠标移到任意一行就能看到它当天的分时图。
 
-Status: **M0–M5 implemented and validated**. 34 unit tests pass, and
-`openidea-plugin build` / `check` both report `ok`. The folder is **linked**
-into the local OpenIDEA plugins directory; open Settings › Plugins and Reload
-to see the single 行情 tab (visual verification still needs a human). See
-[`../DESIGN.md`](../DESIGN.md) for the full design and execution records.
+- **四列自选行情** — `代码 | 名称 | 现价 | 涨跌%`。涨跌方向用 `▲▼` / `±` 文本表达，
+  不靠颜色区分，色弱也能读。
+- **悬停看分时** — 鼠标移入（或键盘聚焦）某一行，右侧即显示该股当日 09:30–15:00
+  的走势：昨收虚线、最新价标记与数值摘要；移出列表即收起，切股不会残留上一只的图。
+- **加股票不用记代码** — 输入 `600519`、`贵州茅台`、`茅台` 或拼音首字母 `gzmt`
+  都能找到；命中多个时弹选择框。只收录 A 股。
+- **拖拽排序** — 顺手拖成你的习惯顺序，刷新、重载、重启 IDE 都记得；点表头排序只是
+  临时视图，不会改写你存下的顺序。
+- **面板内自动刷新** — 默认 10 秒（可设 3–300 秒），另有工具栏按钮、`Ctrl+Alt+S`
+  与状态栏入口；底部显示行情时间。
+- **能力申请克制** — 只要自选存储与 3 个腾讯行情域名。任何一项网络授权被拒都只是
+  降级提示（无行情 / 无法按名搜索 / 图表提示授权），面板不会坏掉。
 
-> The view is a WebView page (`web/index.html`, `[[contributes.views]] web = …`),
-> not a native table and not a `Body::Html` frame. The page owns the refresh
-> timer and talks to the plugin through `openidea.postMessage` /
-> `host::post_view_message`; the plugin fetches, formats and pushes snapshots.
+> 数据来自腾讯财经公开接口（行情 / 检索 / 分时）。分时为非官方公开接口，不保证
+> 长期可用；请求失败只提示错误并保留已有行情，不会清空你的列表。
+
+## 技术说明
+
+- 视图是一个 WebView 页面（`web/index.html`，`[[contributes.views]] web = …`），
+  不是原生表格，也不是 `Body::Html`。刷新计时器在页面内，插件负责取数、格式化并
+  推送快照；两者通过 `openidea.postMessage` / `host::post_view_message` 通信。
+- API 1.3（`engines.openidea = "^1.3"`）；Rust 编译到 `wasm32-wasip2`，SDK 按路径
+  vendor 在 `../vendor/openidea-plugin`，构建不依赖 IDE 仓库。
 
 ## Features
 
@@ -161,3 +174,11 @@ An unsigned local verification package was built and confirmed to contain both
 plugin SVGs plus `view.svg`. Version 0.4.5 is built and signed with the
 publisher key; marketplace publication is tracked separately (see DESIGN.md
 §6.7).
+
+## Development status
+
+**M0–M5 implemented and validated.** `cargo test` passes (55 tests) and
+`openidea-plugin build` / `check` both report `ok`. The folder is **linked**
+into the local OpenIDEA plugins directory — open Settings › Plugins and Reload
+to see the single 行情 tab (visual verification still needs a human). See
+[`../DESIGN.md`](../DESIGN.md) for the full design and execution records.

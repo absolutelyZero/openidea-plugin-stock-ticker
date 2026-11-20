@@ -1,7 +1,7 @@
 id = "absolutelyzero.stock-ticker"
 name = "Stock Ticker"
 version = "0.4.5"
-description = "A-share quotes in a WebView side panel, with hover-linked intraday charts, fuzzy symbol search, page-timer refresh and drag-to-reorder."
+description = "A 股行情侧边栏：四列自选股实时报价，鼠标悬停即看当日分时图，支持代码/名称/拼音模糊搜索、拖拽排序与面板内定时刷新。"
 authors = ["absolutelyZero"]
 license = "MIT"
 homepage = "https://github.com/absolutelyZero/openidea-plugin-stock-ticker"

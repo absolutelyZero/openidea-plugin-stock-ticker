@@ -380,6 +380,8 @@ openidea-plugin index market/ --publisher absolutelyzero --name "absolutelyZero"
 - **README 开篇**：新增面向使用者的简介与 6 条功能要点（`▲▼`+`±` 表达涨跌、悬停分时且移出即收起、代码/名称/拼音添加、拖拽顺序持久化、10 s 默认定时刷新、能力克制与降级），补一段数据来源免责（腾讯公开接口，分时非官方不保证可用，失败保留旧行情），再补「技术说明」（WebView 页面 + 页面内计时器 + API 1.3/vendored SDK）。原内部状态段降级为文末 `## Development status`，内容保留。
 - **未改**：`change-notes` 仍只描述 0.4.5 本身（视图图标），跨版本历史留给 README / 本节。
 - **验证**：`openidea-plugin check` **ok**（0.4.5，509.8 KiB，API 1.3，能力 4 项）。
+- **发布**：`v0.4.5` 标签推送后 `release.yml` 自动构建并签名，Release 已生成 `absolutelyzero.stock-ticker-0.4.5.oiplugin`（282,323 B，sha256 `af268133e3040ca19e4ebb734b4f234f6e2565db918c41ac81f887b18c6557fc`）；本地下载该签名包复核 `check` **ok**，包内 `plugin.toml` 的 `description` 确为新文案，说明文案已随包分发而非只存在于仓库。
+- **市场**：registry 条目（`.workbuddy/tmp/registry-pr/plugins/absolutelyzero.stock-ticker.toml`）与线上对齐（0.1.0 + 0.3.2）后追加 0.4.5；PR 由用户在 `absolutelyZero/openidea-plugins` 提交（本机无 GitHub 凭据，按权限边界不代传）。
 
 ---
 

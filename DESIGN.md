@@ -364,6 +364,15 @@ openidea-plugin index market/ --publisher absolutelyzero --name "absolutelyZero"
 - **验证**：`cargo test` = **55 passed**（解析/错误分类/缓存/权限/消息协议 + 真实报文回归）；前端 `node --check` 与 DOM 结构检查通过，模拟 DOM 覆盖成功/迟到响应/空态/同股失败/切股拒绝；wasm 构建与 `check` 见 §13。IDE 目视项见 §12.3 新增 10–12。
 - **能力变化**：**BREAKING** —— 新增 optional `net:web.ifzq.gtimg.cn`，升级需重新授权；未授权只影响图表。OpenSpec 变更 `intraday-chart-linked-hover` 新增独立能力 `ui/intraday-chart`。
 
+## 6.13 侧边栏视图图标与插件图标（2026-11-20，v0.4.5）
+
+- **症状**：安装后在左侧/右侧工具窗栏里，本插件显示的是宿主的**默认视图图标**，与 Settings › Plugins / 市场里展示的品牌图标不一致。
+- **根因（宿主行为实测）**：`plugin.toml` 的 `icon` / `icon-dark` 只服务「设置页 + 市场」（`manifest.rs` 注释原文 "SVG shown in Settings › Plugins and the marketplace"，见 §6.6），**不参与侧边栏**。侧边栏图标来自 `[[contributes.views]].icon`：宿主读取该相对路径的 SVG、sanitize 后以 `viewIcon/<view-id>` 作为**独立资源**下发给前端（证据：`%APPDATA%/ai.l0ng.openidea/plugins/.cache/contributions/*.json` 中 `assets: [["viewIcon/watchlist", "<svg…>"]]`，且 `json` 里带 `"icon": "icons/view.svg"`；未声明 `icon` 的视图不会产生该资源）。本插件此前未声明 → 无 `viewIcon/watchlist` → 回退通用图标。
+- **字段约束（`openidea-plugin check` 实测）**：views 只接受 `id / title / icon / location / group / when / detail / header / web`；写 `icon-dark = …` 会 **`InvalidInput: unknown field \`icon-dark\``** 而校验失败。侧边栏图标因此是**单套**、按原色渲染（不做主题染色），明暗两套不适用 —— 这也解释了对照插件 `jiusi.stock-watch` 0.9.6 的变更记录「补上插件图标（明暗两套）与侧边栏视图专属图标」为何分两件事。
+- **实现**：新增 `view.svg`（24×24，透明画布内 1..23 的深蓝圆角底 `#15233F` + 三根渐高的半透明白柱 + 红色上升折线 `#F04B4B` + 末端红点），即市场图标的**同母题小尺寸重绘**：柱数由 4 → 3、线宽 5 → 2.2、去掉一层叠压，保证 16 px 下仍能分辨；纯色、无渐变/文字/外部引用，符合 sanitizer 白名单。`[[contributes.views]]` 增加 `icon = "view.svg"`。
+- **验证**：`openidea-plugin check` **ok**；`pack`（未签名）产出的包内含 `view.svg`（9 个文件），说明素材确实随包分发；用 Qt `QSvgRenderer` 在 `#1E1F22` / `#F4F6F9` 两种栏底色下按 16 / 20 / 24 / 32 px 渲染核对，最小尺寸仍可辨「柱 + 红线上扬 + 端点」。
+- **版本**：0.4.5（仅 manifest 与素材变化，`dist/plugin.wasm` 未变）。
+
 ---
 
 ## 7. 生命周期与时序
@@ -440,6 +449,7 @@ id = "watchlist"
 title = "行情"
 location = "right"
 group = "stock"
+icon = "view.svg"          # 侧边栏视图专属图标（与 icon/icon-dark 用途不同）
 
 [[contributes.statusBar]]
 id = "index"

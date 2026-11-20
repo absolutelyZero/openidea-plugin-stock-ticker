@@ -150,6 +150,14 @@ uses only sanitizer allow-listed elements/attributes (`svg`, `rect`, `line`,
 references, `url()`, gradients or `foreignObject`. `icon` requires plugin API
 ≥ 1.2; this plugin declares `^1.3`.
 
+These two files are what the marketplace and Settings › Plugins show. The
+**side rail** uses a separate icon: `[[contributes.views]].icon`, here
+`view.svg`. It is the same motif redrawn for a 24 px box (three bars instead of
+four, heavier strokes, transparent margin) so it stays readable at rail size.
+The view icon takes no `icon-dark` — the IDE rejects that key — so it must read
+correctly on both light and dark rails, which is why it carries its own tile.
+
 An unsigned local verification package was built and confirmed to contain both
-SVGs. Version 0.2.0 is built and signed with the publisher key; marketplace
-publication is tracked separately (see DESIGN.md §6.7).
+plugin SVGs plus `view.svg`. Version 0.4.5 is built and signed with the
+publisher key; marketplace publication is tracked separately (see DESIGN.md
+§6.7).

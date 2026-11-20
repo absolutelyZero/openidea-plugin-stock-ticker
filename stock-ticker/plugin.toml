@@ -1,11 +1,11 @@
 id = "absolutelyzero.stock-ticker"
 name = "Stock Ticker"
-version = "0.4.4"
+version = "0.4.5"
 description = "A-share quotes in a WebView side panel, with hover-linked intraday charts, fuzzy symbol search, page-timer refresh and drag-to-reorder."
 authors = ["absolutelyZero"]
 license = "MIT"
 homepage = "https://github.com/absolutelyZero/openidea-plugin-stock-ticker"
-change-notes = "0.4.4 — 移除分时图上方的图头，代码/名称/日期等信息统一在图表下方摘要行与读屏标签中呈现，图表整体上移；其余行为不变。"
+change-notes = "0.4.5 — 侧边栏视图补上专属图标（view.svg，与市场展示的插件图标同一母题，按 24px 侧栏尺寸重绘），不再显示宿主的默认视图图标；其余行为不变。"
 categories = ["tools"]
 icon = "icon.svg"
 icon-dark = "icon_dark.svg"
@@ -53,6 +53,7 @@ id = "watchlist"
 title = "行情"
 location = "right"
 group = "stock"
+icon = "view.svg"
 web = "web/index.html"
 
 [[contributes.statusBar]]

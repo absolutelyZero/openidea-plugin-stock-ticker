@@ -1,7 +1,7 @@
 //! Persisted state. The wasm instance is reclaimed after five idle minutes, so
 //! `host::storage` is the only source of truth; instance memory is a cache.
 
-use crate::model::{OrderMode, Snapshot, WatchItem};
+use crate::model::{MinuteSeries, OrderMode, Snapshot, WatchItem};
 use openidea_plugin::{Error, LogLevel, host, views::TableSort};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -65,6 +65,9 @@ pub struct State {
     pub order_mode: OrderMode,
     pub meta: Meta,
     pub config: DisplayConfig,
+    /// Per-symbol intraday cache for this instance only. Not persisted:
+    /// minute data is short-lived and storage is the persisted source of truth.
+    pub minute_cache: std::collections::HashMap<String, MinuteSeries>,
 }
 
 impl Default for State {
@@ -76,6 +79,7 @@ impl Default for State {
             order_mode: OrderMode::Column,
             meta: Meta::default(),
             config: DisplayConfig::fallback(),
+            minute_cache: std::collections::HashMap::new(),
         }
     }
 }
@@ -114,6 +118,7 @@ impl State {
             order_mode: read(ORDER_MODE, OrderMode::Column),
             meta: read(META, Meta::default()),
             config: DisplayConfig::read(),
+            minute_cache: std::collections::HashMap::new(),
         };
         if state.watch.len() > crate::model::MAX_WATCH {
             state.watch.truncate(crate::model::MAX_WATCH);

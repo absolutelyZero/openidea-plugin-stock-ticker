@@ -8,6 +8,7 @@
 //! The host only delivers `on-schedule` to inactive plugins, so a page timer is
 //! the only way to refresh while the panel is visible.
 
+mod minute;
 mod model;
 mod quote;
 mod search;
@@ -144,6 +145,62 @@ fn snapshot_json(state: &State) -> String {
 pub(crate) fn publish(state: &State) {
     let _ = host::post_view_message(VIEW_WATCHLIST, &snapshot_json(state));
     set_index_status(state);
+}
+
+/// Build an intraday response. The page echoes `reqId` back to discard stale
+/// responses, so this function never keeps request state on the plugin side.
+fn minute_json(
+    req_id: i64,
+    symbol: &str,
+    result: Result<&model::MinuteSeries, &minute::MinuteError>,
+) -> String {
+    let (status, date, prev_close, points, source, fetched_at, error, grant) = match result {
+        Ok(series) => (
+            "ok",
+            series.date.clone(),
+            serde_json::to_value(series.prev_close).unwrap_or(serde_json::Value::Null),
+            series
+                .points
+                .iter()
+                .map(|p| serde_json::json!([p.time, p.price, p.volume]))
+                .collect::<Vec<_>>(),
+            series.source.clone(),
+            series.fetched_at,
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+        ),
+        Err(e) => (
+            e.status(),
+            String::new(),
+            serde_json::Value::Null,
+            Vec::new(),
+            String::new(),
+            0,
+            serde_json::Value::String(e.message()),
+            serde_json::to_value(e.grant()).unwrap_or(serde_json::Value::Null),
+        ),
+    };
+    serde_json::json!({
+        "type": "minute",
+        "reqId": req_id,
+        "symbol": symbol,
+        "status": status,
+        "date": date,
+        "prevClose": prev_close,
+        "points": points,
+        "source": source,
+        "fetchedAt": fetched_at,
+        "error": error,
+        "grant": grant,
+    })
+    .to_string()
+}
+
+/// Intraday responses are independent of snapshots: never touch the status bar
+/// or rewrite quote rows when only a chart is being updated.
+pub(crate) fn publish_minute(req_id: i64, json: &str) {
+    let _ = req_id;
+    let _ = host::post_view_message(VIEW_WATCHLIST, json);
 }
 
 /// Add an already-resolved secid to the watchlist, persist it, then fetch fresh
@@ -401,6 +458,27 @@ impl Views for StockPlugin {
                 }
                 publish(&self.state);
             }
+            "minute" => {
+                let symbol = msg
+                    .get("symbol")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let req_id = msg.get("reqId").and_then(|v| v.as_i64()).unwrap_or(-1);
+                let force = msg.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+                if self.state.watch.iter().any(|w| w.symbol == symbol) {
+                    let result = minute::fetch_minute(&self.state, &symbol, force);
+                    if let Ok(series) = &result {
+                        self.state.minute_cache.insert(symbol.clone(), series.clone());
+                    }
+                    let json = minute_json(req_id, &symbol, result.as_ref());
+                    publish_minute(req_id, &json);
+                } else {
+                    let error = minute::MinuteError::InvalidSymbol;
+                    let json = minute_json(req_id, &symbol, Err(&error));
+                    publish_minute(req_id, &json);
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -589,5 +667,104 @@ mod tests {
         h.answer_next_prompt(Some(&["600519"]));
         message(&mut p, &h, r#"{"type":"add"}"#);
         assert!(p.state.watch.iter().any(|w| w.symbol == "1.600519"));
+    }
+
+    fn minute_body() -> Vec<u8> {
+        r#"{"data":{"sh600519":{"date":"20261120","data":["0930 1438.55 1 1"],
+            "qt":{"sh600519":["1","贵州茅台","600519","1438.55","1435.26"]}}}}"#
+            .as_bytes()
+            .to_vec()
+    }
+
+    fn plugin_with_minute_grant() -> (MockHost, StockPlugin) {
+        let h = MockHost::install().with_capabilities(&[
+            "storage",
+            "events",
+            "net:qt.gtimg.cn",
+            "net:proxy.finance.qq.com",
+            "net:web.ifzq.gtimg.cn",
+        ]);
+        let mut p = StockPlugin::default();
+        p.activate(&h.context("absolutelyzero.stock-ticker")).unwrap();
+        (h, p)
+    }
+
+    fn last_minute(h: &MockHost) -> serde_json::Value {
+        h.view_messages()
+            .iter()
+            .rev()
+            .filter_map(|(_, text)| serde_json::from_str::<serde_json::Value>(text).ok())
+            .find(|v| v.get("type").and_then(|t| t.as_str()) == Some("minute"))
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn minute_message_echoes_req_id_and_caches_the_series() {
+        let (h, mut p) = plugin_with_minute_grant();
+        h.on_fetch(|_| Ok(HttpResponse { status: 200, headers: vec![], body: minute_body() }));
+        p.state.watch.push(WatchItem { symbol: "1.600519".into(), ..Default::default() });
+        message(&mut p, &h, r#"{"type":"minute","symbol":"1.600519","reqId":7,"force":true}"#);
+
+        let response = last_minute(&h);
+        assert_eq!(response["reqId"], 7);
+        assert_eq!(response["symbol"], "1.600519");
+        assert_eq!(response["status"], "ok");
+        assert_eq!(response["prevClose"], 1435.26);
+        assert_eq!(response["points"].as_array().unwrap().len(), 1);
+        assert!(p.state.minute_cache.contains_key("1.600519"));
+        assert!(h.requests()[0].url.contains("web.ifzq.gtimg.cn"));
+    }
+
+    #[test]
+    fn minute_message_rejects_unknown_symbol_without_fetching() {
+        let (h, mut p) = plugin_with_minute_grant();
+        message(&mut p, &h, r#"{"type":"minute","symbol":"9.999999","reqId":3}"#);
+        assert_eq!(last_minute(&h)["status"], "invalid_symbol");
+        assert_eq!(last_minute(&h)["reqId"], 3);
+        assert!(h.requests().is_empty());
+    }
+
+    #[test]
+    fn minute_message_reports_denied_with_an_actionable_grant() {
+        let (h, mut p) = plugin(); // no net:web.ifzq.gtimg.cn grant
+        p.state.watch.push(WatchItem { symbol: "1.600519".into(), ..Default::default() });
+        message(&mut p, &h, r#"{"type":"minute","symbol":"1.600519","reqId":9}"#);
+        let response = last_minute(&h);
+        assert_eq!(response["status"], "denied");
+        assert_eq!(response["grant"], "net:web.ifzq.gtimg.cn");
+        assert!(response["error"].as_str().unwrap().contains("授权"));
+    }
+
+    #[test]
+    fn minute_does_not_disturb_snapshot_or_status_bar() {
+        let (h, mut p) = plugin_with_minute_grant();
+        h.on_fetch(|req| {
+            let body = if req.url.contains("web.ifzq.gtimg.cn") {
+                minute_body()
+            } else {
+                good()
+            };
+            Ok(HttpResponse { status: 200, headers: vec![], body })
+        });
+        p.state.watch.push(WatchItem { symbol: "1.600519".into(), ..Default::default() });
+        message(&mut p, &h, r#"{"type":"refresh"}"#);
+        let before: Vec<String> = h
+            .view_messages()
+            .iter()
+            .filter(|(_, m)| m.contains("\"type\":\"snapshot\""))
+            .map(|(_, m)| m.clone())
+            .collect();
+        let status_before = h.status_items().get("index").unwrap().text.clone();
+
+        message(&mut p, &h, r#"{"type":"minute","symbol":"1.600519","reqId":11}"#);
+        let after: Vec<String> = h
+            .view_messages()
+            .iter()
+            .filter(|(_, m)| m.contains("\"type\":\"snapshot\""))
+            .map(|(_, m)| m.clone())
+            .collect();
+        assert_eq!(before, after);
+        assert_eq!(h.status_items().get("index").unwrap().text, status_before);
+        assert_eq!(last_minute(&h)["reqId"], 11);
     }
 }

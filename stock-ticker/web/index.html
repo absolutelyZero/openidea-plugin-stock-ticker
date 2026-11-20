@@ -16,7 +16,11 @@
     --input: var(--openidea-bg-input, rgba(255, 255, 255, 0.06));
     --font: var(--openidea-font-ui, system-ui, -apple-system, "Segoe UI", sans-serif);
     --mono: var(--openidea-font-mono, ui-monospace, Consolas, monospace);
+    --chart-grid: var(--openidea-border, #3c3c3c);
+    --up: var(--openidea-up, #e5534b);
+    --down: var(--openidea-down, #26a269);
   }
+  [hidden] { display: none !important; }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body { display: flex; flex-direction: column; font: 13px/1.45 var(--font); color: var(--fg); background: var(--bg); }
@@ -48,6 +52,19 @@
   tbody tr.dragging { opacity: 0.4; }
   tbody tr.drop-before td { box-shadow: inset 0 2px 0 var(--accent); }
   tbody tr.drop-after td { box-shadow: inset 0 -2px 0 var(--accent); }
+  tbody tr.chart-active { box-shadow: inset 3px 0 0 var(--accent); }
+  tbody tr:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .panes { flex: 1 1 auto; display: flex; min-height: 0; }
+  .pane-list { flex: 0 0 50%; min-width: 280px; overflow: hidden; border-right: 1px solid var(--border); }
+  .pane-list .wrap { height: 100%; }
+  .pane-chart { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; padding: 4px 8px; }
+  .chart-stage { position: relative; flex: 1 1 auto; min-height: 120px; }
+  #chart-svg { width: 100%; height: 100%; display: block; }
+  .chart-overlay { position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.72); color: #ffffff; font-size: 12px; text-align: center; padding: 8px; }
+  .chart-empty { position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; color: var(--fg-muted); font-size: 12px; text-align: center; padding: 8px; }
+  .chart-meta { font-size: 12px; color: var(--fg-muted); padding-top: 4px; min-height: 18px; }
+  .chart-status { font-size: 12px; min-height: 16px; color: var(--fg-muted); }
+  .chart-status.err { color: var(--danger); }
   .empty { padding: 24px 12px; text-align: center; color: var(--fg-muted); }
   .foot { flex: 0 0 auto; padding: 5px 8px; border-top: 1px solid var(--border); color: var(--fg-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .foot .err { color: var(--danger); }
@@ -63,12 +80,25 @@
     <input id="secs" type="number" min="3" max="300" step="1" title="刷新间隔（秒，3–300）">
     <span class="muted">秒</span>
   </div>
-  <div class="wrap">
-    <table>
-      <thead><tr id="head"></tr></thead>
-      <tbody id="body"></tbody>
-    </table>
-    <div id="empty" class="empty" hidden>暂无自选股，点「添加」开始</div>
+  <div class="panes">
+    <div class="pane pane-list" id="pane-list">
+      <div class="wrap">
+        <table>
+          <thead><tr id="head"></tr></thead>
+          <tbody id="body"></tbody>
+        </table>
+        <div id="empty" class="empty" hidden>暂无自选股，点「添加」开始</div>
+      </div>
+    </div>
+    <div class="pane pane-chart">
+      <div id="chart-stage" class="chart-stage">
+        <svg id="chart-svg" role="img" aria-label="分时图：暂无数据" viewBox="0 0 600 240" preserveAspectRatio="none"></svg>
+        <div id="chart-empty" class="chart-empty">将鼠标移到左侧股票行查看当日分时</div>
+        <div id="chart-overlay" class="chart-overlay" hidden><span id="chart-overlay-text">加载中…</span></div>
+      </div>
+      <div id="chart-meta" class="chart-meta">将鼠标移到左侧股票行查看当日分时</div>
+      <div id="chart-status" class="chart-status" role="status" aria-live="polite"></div>
+    </div>
   </div>
   <div id="foot" class="foot">正在加载…</div>
 
@@ -84,7 +114,14 @@
     dropBefore: true,
     deferredSnapshot: null,
     suppressClickUntil: 0,
-    pressSymbol: null, pressY: 0, moved: false
+    pressSymbol: null, pressY: 0, moved: false,
+    // intraday chart state
+    minuteSeq: 0,
+    minuteActiveReqId: -1,
+    minuteSymbol: null,
+    minuteDebounce: null,
+    minuteLocalCache: {},
+    shownSymbol: null
   };
   var tbody = document.getElementById('body');
 
@@ -104,6 +141,10 @@
       } else {
         applySnapshot(m);
       }
+    } else if (m && m.type === 'minute') {
+      // A stale response must never overwrite the chart of the hovered row.
+      if (m.reqId !== state.minuteActiveReqId) return;
+      applyMinuteMessage(m);
     }
   }
 
@@ -127,6 +168,7 @@
     state.columns.forEach(function (name, col) {
       var th = document.createElement('th');
       th.textContent = name;
+      th.scope = 'col';
       th.onclick = function () {
         state.desc = state.sortCol === col ? !state.desc : false;
         state.sortCol = col;
@@ -160,6 +202,19 @@
         td.textContent = cell;
         tr.appendChild(td);
       });
+      tr.tabIndex = 0;
+      tr.onmouseenter = function () {
+        if (!state.dragging) scheduleMinute(row.symbol, false);
+      };
+      tr.onfocus = function () {
+        if (!state.dragging) scheduleMinute(row.symbol, false);
+      };
+      tr.onblur = function (e) {
+        // Leaving the list (Tab out, click elsewhere) hides the chart again.
+        var to = e && e.relatedTarget;
+        if (!to || !tbody.contains(to)) resetChart();
+      };
+      tr.onkeydown = function (e) { handleRowKey(e, row.symbol); };
       tr.onclick = function () {
         if (state.dragging || Date.now() < state.suppressClickUntil) return;
         selectSymbol(row.symbol);
@@ -173,6 +228,7 @@
     // Restore the highlight after a re-render.
     if (state.selected) selectSymbol(state.selected);
     else document.getElementById('remove').disabled = true;
+    if (state.shownSymbol) markActive(state.shownSymbol);
   }
 
   function selectSymbol(symbol) {
@@ -182,6 +238,327 @@
       rows[i].classList.toggle('sel', rows[i].dataset.symbol === symbol);
     }
     document.getElementById('remove').disabled = !symbol;
+  }
+
+  // ---- Intraday chart -------------------------------------------------
+  function $(id) { return document.getElementById(id); }
+
+  function rowLabel(symbol) {
+    for (var i = 0; i < state.rows.length; i++) {
+      if (state.rows[i].symbol === symbol) {
+        var cells = state.rows[i].cells || [];
+        return (cells[0] || symbol) + (cells[1] ? ' ' + cells[1] : '');
+      }
+    }
+    return symbol;
+  }
+
+  function dateText(raw) {
+    if (!raw || raw.length !== 8) return raw || '';
+    return raw.slice(0, 4) + '-' + raw.slice(4, 6) + '-' + raw.slice(6, 8);
+  }
+
+  function setChartStatus(text, isError) {
+    var el = $('chart-status');
+    el.textContent = text || '';
+    el.className = 'chart-status' + (isError ? ' err' : '');
+  }
+
+  function showOverlay(text) {
+    $('chart-overlay-text').textContent = text || '加载中…';
+    $('chart-overlay').hidden = false;
+    $('chart-empty').hidden = true;
+  }
+
+  function hideOverlay() {
+    $('chart-overlay').hidden = true;
+  }
+
+  function markActive(symbol) {
+    var rows = tbody.querySelectorAll('tr');
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].dataset.symbol === symbol) rows[i].classList.add('chart-active');
+      else rows[i].classList.remove('chart-active');
+    }
+  }
+
+  function svgEl(name, attrs) {
+    var el = document.createElementNS('http://www.w3.org/2000/svg', name);
+    for (var k in attrs) {
+      if (Object.prototype.hasOwnProperty.call(attrs, k)) el.setAttribute(k, attrs[k]);
+    }
+    return el;
+  }
+
+  // A-share session: 09:30-11:30 plus 13:00-15:00 = 240 plotted minutes.
+  var SESSION_MINUTES = 240;
+  // `HHMM` -> minutes since the open, with the lunch break collapsed so the
+  // 11:30 and 13:00 samples share the same x position.
+  function sessionMinute(raw) {
+    var s = String(raw || '');
+    if (s.length !== 4 || !/^[0-9]{4}$/.test(s)) return null;
+    var h = Number(s.slice(0, 2)), mi = Number(s.slice(2));
+    if (h > 23 || mi > 59) return null;
+    var t = h * 60 + mi;
+    if (t < 570 || t > 900) return null;
+    if (t <= 690) return t - 570;
+    if (t >= 780) return 120 + (t - 780);
+    return 120;
+  }
+
+  function renderChart(m) {
+    var svg = $('chart-svg');
+    svg.textContent = '';
+    var points = m.points || [];
+    if (!points.length) return;
+    var W = 600, H = 240, L = 48, R = 12, T = 12, B = 24;
+    var x0 = L, x1 = W - R, y0 = T, y1 = H - B;
+    var prices = [], minutes = [], axisOk = true;
+    for (var i = 0; i < points.length; i++) {
+      prices.push(Number(points[i][1]));
+      var mm = sessionMinute(points[i][0]);
+      if (mm === null) axisOk = false;
+      minutes.push(mm);
+    }
+    var min = Math.min.apply(null, prices), max = Math.max.apply(null, prices);
+    var prev = (typeof m.prevClose === 'number' && m.prevClose > 0) ? m.prevClose : null;
+    if (prev) {
+      var half = Math.max(Math.abs(max - prev), Math.abs(min - prev), prev * 0.01);
+      min = prev - half;
+      max = prev + half;
+    } else {
+      var pad = (max - min) * 0.1 || (max * 0.01) || 1;
+      min -= pad;
+      max += pad;
+    }
+    var span = (max - min) || 1;
+    // The X axis always spans the whole session (09:30-15:00), so the line
+    // grows from the left instead of being stretched across the pane.
+    function X(index) {
+      if (axisOk) return x0 + (x1 - x0) * minutes[index] / SESSION_MINUTES;
+      return points.length === 1 ? (x0 + x1) / 2 : x0 + (x1 - x0) * index / (points.length - 1);
+    }
+    function Y(price) { return y1 - (price - min) / span * (y1 - y0); }
+
+    var grid = [min, (min + max) / 2, max];
+    for (var g = 0; g < grid.length; g++) {
+      var gy = Y(grid[g]);
+      svg.appendChild(svgEl('line', { x1: x0, y1: gy, x2: x1, y2: gy, stroke: 'var(--chart-grid)', 'stroke-width': 1 }));
+      var pl = svgEl('text', { x: x0 - 4, y: gy + 4, 'text-anchor': 'end', fill: 'var(--fg-muted)', 'font-size': 11 });
+      pl.textContent = grid[g].toFixed(2);
+      svg.appendChild(pl);
+    }
+
+    // Fixed session ticks: 09:30 / 10:30 / 11:30-13:00 / 14:00 / 15:00.
+    var ticks = axisOk
+      ? [[0, '09:30'], [60, '10:30'], [120, '11:30/13:00'], [180, '14:00'], [240, '15:00']]
+      : null;
+    if (ticks) {
+      for (var t = 0; t < ticks.length; t++) {
+        var tx = x0 + (x1 - x0) * ticks[t][0] / SESSION_MINUTES;
+        svg.appendChild(svgEl('line', {
+          x1: tx, y1: y0, x2: tx, y2: y1,
+          stroke: 'var(--chart-grid)', 'stroke-width': 1, 'stroke-opacity': 0.35,
+          'stroke-dasharray': '2 4'
+        }));
+        var tl = svgEl('text', {
+          x: tx, y: H - 6,
+          'text-anchor': t === 0 ? 'start' : (t === ticks.length - 1 ? 'end' : 'middle'),
+          fill: 'var(--fg-muted)', 'font-size': 11
+        });
+        tl.textContent = ticks[t][1];
+        svg.appendChild(tl);
+      }
+    } else {
+      var fractions = [0, 0.25, 0.5, 0.75, 1];
+      for (var f = 0; f < fractions.length; f++) {
+        var idx = Math.round((points.length - 1) * fractions[f]);
+        var raw = String(points[idx][0] || '');
+        var ft = raw.length === 4 ? raw.slice(0, 2) + ':' + raw.slice(2) : raw;
+        var fl = svgEl('text', {
+          x: X(idx), y: H - 6, 'text-anchor': f === 0 ? 'start' : (f === 4 ? 'end' : 'middle'),
+          fill: 'var(--fg-muted)', 'font-size': 11
+        });
+        fl.textContent = ft;
+        svg.appendChild(fl);
+      }
+    }
+
+    // Previous close: a heavier dashed line plus a labelled value, because it
+    // is the reference every intraday move is judged against.
+    if (prev) {
+      var py = Y(prev);
+      svg.appendChild(svgEl('line', {
+        x1: x0, y1: py, x2: x1, y2: py,
+        stroke: 'var(--fg-muted)', 'stroke-width': 1.5, 'stroke-dasharray': '7 4'
+      }));
+      var pp = svgEl('text', {
+        x: x1, y: py + (py < y0 + 14 ? 13 : -6), 'text-anchor': 'end',
+        fill: 'var(--fg-muted)', 'font-size': 11, 'font-weight': 600
+      });
+      pp.textContent = '昨收 ' + prev.toFixed(2);
+      svg.appendChild(pp);
+    }
+
+    var lastIndex = points.length - 1;
+    var coords = [];
+    for (var j = 0; j < points.length; j++) coords.push(X(j) + ',' + Y(prices[j]));
+    // Red up / green down, decided by the last price relative to yesterday's close.
+    var last = prices[lastIndex];
+    var color = 'var(--up)';
+    if (prev) color = last >= prev ? 'var(--up)' : 'var(--down)';
+    else if (points.length > 1) color = last >= prices[0] ? 'var(--up)' : 'var(--down)';
+    var lastX = X(lastIndex), lastY = Y(last);
+    svg.appendChild(svgEl('polygon', {
+      points: x0 + ',' + y1 + ' ' + coords.join(' ') + ' ' + lastX + ',' + y1,
+      fill: color, 'fill-opacity': 0.12, stroke: 'none'
+    }));
+    svg.appendChild(svgEl('polyline', {
+      points: coords.join(' '), fill: 'none', stroke: color, 'stroke-width': 1.5
+    }));
+
+    // Highlight the latest sample: halo + solid dot + bold price tag.
+    svg.appendChild(svgEl('circle', {
+      cx: lastX, cy: lastY, r: 6, fill: color, 'fill-opacity': 0.25, stroke: 'none'
+    }));
+    svg.appendChild(svgEl('circle', {
+      cx: lastX, cy: lastY, r: 3, fill: color, stroke: 'none'
+    }));
+    var nearRight = lastX > x1 - 70;
+    // Keep the price tag clear of the previous-close label when both sit at
+    // the right edge: fall back to the space below the dot.
+    var belowDot = nearRight && prev && Math.abs(lastY - Y(prev)) < 20;
+    var tagX = nearRight ? lastX - 8 : Math.min(x1, lastX + 8);
+    var tagY = belowDot ? Math.min(y1 - 4, lastY + 14) : Math.max(y0 + 10, lastY - 9);
+    var tag = svgEl('text', {
+      x: tagX, y: tagY,
+      'text-anchor': nearRight ? 'end' : 'start',
+      fill: color, 'font-size': 12, 'font-weight': 700
+    });
+    tag.textContent = last.toFixed(2);
+    svg.appendChild(tag);
+
+    var direction = '暂无昨收参考';
+    var pct = '';
+    if (prev) {
+      direction = last >= prev ? '上涨 ▲' : '下跌 ▼';
+      var change = (last - prev) / prev * 100;
+      pct = (change >= 0 ? ' +' : ' ') + change.toFixed(2) + '%';
+    }
+    var summary = rowLabel(m.symbol) + ' · 分时 ' + dateText(m.date) +
+      ' · 最新 ' + last.toFixed(2) + ' · ' + direction + pct +
+      (prev ? ' · 昨收 ' + prev.toFixed(2) : '');
+    svg.setAttribute('aria-label', summary);
+    $('chart-meta').textContent = summary;
+  }
+
+  // Back to the idle placeholder: used when the pointer leaves the list or
+  // keyboard focus exits it, so the pane never shows a chart nobody asked for.
+  function resetChart() {
+    if (state.minuteDebounce) { clearTimeout(state.minuteDebounce); state.minuteDebounce = null; }
+    state.minuteActiveReqId = -1;
+    state.minuteSymbol = null;
+    state.shownSymbol = null;
+    markActive('');
+    var hint = '将鼠标移到左侧股票行查看当日分时';
+    var svg = $('chart-svg');
+    svg.textContent = '';
+    svg.setAttribute('aria-label', '分时图：暂无数据');
+    $('chart-empty').textContent = hint;
+    $('chart-empty').hidden = false;
+    $('chart-overlay').hidden = true;
+    $('chart-meta').textContent = hint;
+    setChartStatus('');
+  }
+
+  function clearChart(symbol, message) {
+    state.shownSymbol = null;
+    markActive('');
+    $('chart-svg').textContent = '';
+    $('chart-svg').setAttribute('aria-label', rowLabel(symbol) + ' 分时图：' + message);
+    $('chart-empty').textContent = message;
+    $('chart-empty').hidden = false;
+    $('chart-overlay').hidden = true;
+    $('chart-meta').textContent = message;
+  }
+
+  function applyMinuteData(m) {
+    state.shownSymbol = m.symbol;
+    $('chart-empty').hidden = true;
+    $('chart-overlay').hidden = true;
+    renderChart(m);
+    setChartStatus('');
+    markActive(m.symbol);
+  }
+
+  function applyMinuteMessage(m) {
+    if (m.status === 'ok' && m.points && m.points.length) {
+      state.minuteLocalCache[m.symbol] = { at: Date.now(), data: m };
+      applyMinuteData(m);
+      return;
+    }
+    if (m.status === 'cancelled') return;
+    if (m.status === 'empty') {
+      var emptyText = m.error || '暂无分时数据（非交易日或未开盘）';
+      clearChart(m.symbol, emptyText);
+      setChartStatus(emptyText, false);
+      return;
+    }
+    var text = m.error || '分时数据加载失败';
+    setChartStatus(text, true);
+    // A failed refresh of the visible symbol keeps its old chart; a failed
+    // switch must not leave a previous stock's data on screen.
+    if (m.symbol !== state.shownSymbol) clearChart(m.symbol, text);
+    else hideOverlay();
+  }
+
+  function requestMinute(symbol, force) {
+    var cached = state.minuteLocalCache[symbol];
+    if (!force && cached && Date.now() - cached.at < 30000) {
+      state.minuteActiveReqId = -1;
+      applyMinuteData(cached.data);
+      return;
+    }
+    state.minuteActiveReqId = ++state.minuteSeq;
+    state.minuteSymbol = symbol;
+    var word = symbol === state.shownSymbol ? '加载中…' : '正在加载 ' + rowLabel(symbol) + '…';
+    showOverlay(word);
+    send({ type: 'minute', symbol: symbol, reqId: state.minuteActiveReqId, force: !!force });
+  }
+
+  function scheduleMinute(symbol, force) {
+    if (state.dragging) return;
+    if (state.minuteDebounce) clearTimeout(state.minuteDebounce);
+    state.minuteDebounce = setTimeout(function () {
+      state.minuteDebounce = null;
+      requestMinute(symbol, force);
+    }, 120);
+  }
+
+  function handleRowKey(e, symbol) {
+    var key = e.key;
+    if (!key) {
+      var codes = { 38: 'ArrowUp', 40: 'ArrowDown', 36: 'Home', 35: 'End', 13: 'Enter', 32: ' ' };
+      key = codes[e.keyCode] || '';
+    }
+    if (key === 'Enter' || key === ' ') {
+      e.preventDefault();
+      if (!state.dragging) selectSymbol(symbol);
+      return;
+    }
+    if (key !== 'ArrowUp' && key !== 'ArrowDown' && key !== 'Home' && key !== 'End') return;
+    e.preventDefault();
+    var rows = tbody.querySelectorAll('tr');
+    if (!rows.length) return;
+    var index = -1;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].dataset.symbol === symbol) { index = i; break; }
+    }
+    var target = index;
+    if (key === 'Home') target = 0;
+    else if (key === 'End') target = rows.length - 1;
+    else target = Math.max(0, Math.min(rows.length - 1, index + (key === 'ArrowDown' ? 1 : -1)));
+    if (target >= 0 && rows[target]) rows[target].focus();
   }
 
   function clearDropMarkers() {
@@ -266,6 +643,11 @@
       state.moved = true;
       state.dragging = true;
       state.dragSymbol = state.pressSymbol;
+      // A pending hover request must not fire mid-drag; drop any in-flight
+      // response so the chart stays with the symbol it already shows.
+      if (state.minuteDebounce) { clearTimeout(state.minuteDebounce); state.minuteDebounce = null; }
+      state.minuteActiveReqId = -1;
+      hideOverlay();
       var src = rowBySymbol(state.dragSymbol);
       if (src) src.classList.add('dragging');
     }
@@ -350,6 +732,10 @@
   }
 
   document.getElementById('refresh').onclick = function () { send({ type: 'refresh' }); };
+  // Leaving the list hides the chart (hover is the only trigger besides focus).
+  document.getElementById('pane-list').onmouseleave = function () {
+    if (!state.dragging) resetChart();
+  };
   document.getElementById('add').onclick = function () { send({ type: 'add' }); };
   document.getElementById('remove').onclick = function () {
     if (state.selected) send({ type: 'remove', symbol: state.selected });

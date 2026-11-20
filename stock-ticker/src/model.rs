@@ -8,6 +8,44 @@ use std::cmp::Ordering;
 pub const COLUMNS: [&str; 4] = ["代码", "名称", "现价", "涨跌%"];
 pub const MAX_WATCH: usize = 200;
 
+/// `market.code` secid → the `sh`/`sz`/`bj` code Tencent's endpoints expect.
+/// Shared by batch quotes and the intraday endpoint so both address the same
+/// instrument, including Beijing listings (which use the `0.` channel).
+pub(crate) fn tencent_code(secid: &str) -> Option<String> {
+    let (market, code) = secid.split_once('.')?;
+    if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let prefix = match market {
+        "1" => "sh",
+        // Beijing listings share the 0. channel in the stored secid.
+        "0" if code.starts_with('4') || code.starts_with('8') => "bj",
+        "0" => "sz",
+        _ => return None,
+    };
+    Some(format!("{prefix}{code}"))
+}
+
+/// One intraday sample. `time` is "HHMM"; `volume` is cumulative volume.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MinutePoint {
+    pub time: String,
+    pub price: f64,
+    pub volume: f64,
+}
+
+/// One symbol's intraday series for a single trading day. `date` is
+/// "YYYYMMDD" and is used to invalidate cached data across sessions/days.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MinuteSeries {
+    pub symbol: String,
+    pub date: String,
+    pub prev_close: Option<f64>,
+    pub points: Vec<MinutePoint>,
+    pub fetched_at: i64,
+    pub source: String,
+}
+
 /// Which order the watchlist rows are displayed in. `Column` sorts by the
 /// selected header (a transient view); `Custom` follows the persisted `watch`
 /// array order defined by drag-and-drop.

@@ -1,11 +1,11 @@
 id = "absolutelyzero.stock-ticker"
 name = "Stock Ticker"
-version = "0.3.2"
-description = "A-share quotes in a WebView side panel, with fuzzy symbol search, page-timer refresh and drag-to-reorder."
+version = "0.4.4"
+description = "A-share quotes in a WebView side panel, with hover-linked intraday charts, fuzzy symbol search, page-timer refresh and drag-to-reorder."
 authors = ["absolutelyZero"]
 license = "MIT"
 homepage = "https://github.com/absolutelyZero/openidea-plugin-stock-ticker"
-change-notes = "0.3.2 — 修复 WebView 内拖拽排序：改用鼠标手势实现，兼容宿主对原生拖拽事件的拦截；表头列排序为不改底层顺序的临时视图。"
+change-notes = "0.4.4 — 移除分时图上方的图头，代码/名称/日期等信息统一在图表下方摘要行与读屏标签中呈现，图表整体上移；其余行为不变。"
 categories = ["tools"]
 icon = "icon.svg"
 icon-dark = "icon_dark.svg"
@@ -15,7 +15,7 @@ activation = ["on-view:watchlist"]
 
 [capabilities]
 required = ["storage"]
-optional = ["net:qt.gtimg.cn", "net:proxy.finance.qq.com"]
+optional = ["net:qt.gtimg.cn", "net:proxy.finance.qq.com", "net:web.ifzq.gtimg.cn"]
 
 [[contributes.commands]]
 id = "refresh"

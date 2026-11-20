@@ -15,9 +15,18 @@ to see the single 行情 tab (visual verification still needs a human). See
 
 ## Features
 
-- **4 columns only**: `代码 | 名称 | 现价 | 涨跌%` (plain text; no red/green coloring).
+- **4 columns only**: `代码 | 名称 | 现价 | 涨跌%` (plain text; direction is shown
+  with `▲▼` / `+−`, not by color). The right-hand intraday chart uses the A-share
+  convention (red = up, green = down) together with a `▲▼` text summary, and its
+  X axis always covers the full 09:30–15:00 session.
 - **行情** — a WebView tab: clickable headers re-sort, click selects a row,
   double-click opens its quote page, toolbar has refresh / add / remove.
+- **Hover-linked intraday chart**: hovering (or keyboard-focusing) a row shows
+  that stock's current-day minute chart in the right pane; switching rows
+  cancels stale responses, and moving the mouse out of the list (or tabbing
+  away) clears the pane back to its placeholder.
+  Loading / no-data / failure states are displayed, including an actionable
+  prompt when `net:web.ifzq.gtimg.cn` is not granted.
 - **Drag to reorder**: drag any row to a new position to define your own
   watchlist order. The dragged order is persisted (`watch.v1`) and survives
   refresh, reload and IDE restarts. The two ordering modes are mutually
@@ -60,6 +69,7 @@ stock-ticker/
 ├─ src/
 │  ├─ lib.rs               # Plugin + Views, message protocol, snapshot push
 │  ├─ model.rs             # pure domain model, normalize, ordered_rows
+│  ├─ minute.rs            # intraday JSON parsing, fetch, error classification
 │  ├─ quote.rs             # Tencent GBK quote parsing
 │  ├─ search.rs            # fuzzy symbol/name/pinyin lookup (Tencent JSON)
 │  ├─ state.rs             # storage + live settings
@@ -73,7 +83,7 @@ does not depend on a git checkout of the whole IDE repository.
 ## Commands
 
 ```sh
-cargo test                       # 34 native tests against the SDK mock host
+cargo test                       # 55 native tests against the SDK mock host
 openidea-plugin build            # -> dist/plugin.wasm, then check
 openidea-plugin check            # validate manifest + component
 openidea-plugin link .           # load this folder in the IDE (already linked)
@@ -92,10 +102,11 @@ breaking the view.
 | `storage` (required) | low | Persist the watchlist, last quote snapshot, sort order, refresh interval and alert de-duplication across IDE restarts and the 5-minute idle reclaim | plugin cannot load |
 | `net:qt.gtimg.cn` (optional) | medium | Batched A-share quotes: one HTTPS request per refresh for the whole watchlist plus indices | no quotes; cached snapshot + an explicit error is shown |
 | `net:proxy.finance.qq.com` (optional) | medium | Fuzzy lookup when adding by Chinese name, pinyin initials (`gzmt`) or a partial code | adding by full code still works; name search reports the missing grant |
+| `net:web.ifzq.gtimg.cn` (optional, new in 0.4.0) | medium | Current-day minute series for the hover-linked intraday chart (one symbol at a time, cached for 60 s) | quotes and all list interactions keep working; the chart shows an actionable authorization prompt |
 
 No `process:*`, `fs.*`, `secrets`, `project.write`, `ide.commands` or clipboard
 access is used. All requests are read-only HTTPS with a 4 s timeout; no data
-leaves the machine other than these two quote/search requests.
+leaves the machine other than these quote/search/minute requests.
 
 ## Building from source
 
@@ -103,7 +114,7 @@ leaves the machine other than these two quote/search requests.
 `src/` and the vendored SDK in `../vendor/openidea-plugin`:
 
 ```sh
-cargo test                                   # 34 native tests against the SDK mock host
+cargo test                                   # 55 native tests against the SDK mock host
 rustup target add wasm32-wasip2
 cargo build --release --target wasm32-wasip2
 # or, equivalently, the official CLI (which then runs check):
@@ -119,11 +130,14 @@ The published `.oiplugin` is produced from exactly these sources with
 |---|---|---|
 | Batched quotes | `qt.gtimg.cn` | `net:qt.gtimg.cn` |
 | Fuzzy symbol search | `proxy.finance.qq.com` | `net:proxy.finance.qq.com` |
+| Intraday minute chart | `web.ifzq.gtimg.cn` | `net:web.ifzq.gtimg.cn` |
 
-Both are **optional** capabilities. If the search grant is missing, the add
-command reports an actionable message instead of failing silently. Quotes are
-`~`-separated GBK text decoded to UTF-8 on the plugin side; the search endpoint
-is UTF-8 JSON (`data.stock`, rows typed `GP-A` are kept).
+All three are **optional** capabilities. If the search or minute grant is
+missing, the affected feature reports an actionable message instead of failing
+silently. Quotes are `~`-separated GBK text decoded to UTF-8 on the plugin side;
+the search and minute endpoints are UTF-8 JSON (`data.stock` / `data.<code>.data`).
+The minute endpoint is an unofficial public interface with no availability
+guarantee; failures never overwrite the quote list.
 
 ## Plugin icon
 

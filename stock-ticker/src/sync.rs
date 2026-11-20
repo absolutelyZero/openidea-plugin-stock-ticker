@@ -3,7 +3,7 @@
 //! `render()`.
 
 use crate::{
-    model::{Quote, Snapshot},
+    model::{Quote, Snapshot, tencent_code},
     state::{now_secs, State},
 };
 use openidea_plugin::{
@@ -14,22 +14,6 @@ const QUOTE_HOST: &str = "qt.gtimg.cn";
 const SOURCE_LABEL: &str = "腾讯行情";
 /// A non-forced refresh is skipped while the last attempt is this recent.
 const THROTTLE_SECS: i64 = 55;
-
-/// `market.code` secid → the `sh`/`sz`/`bj` code `qt.gtimg.cn` expects.
-fn tencent_code(secid: &str) -> Option<String> {
-    let (market, code) = secid.split_once('.')?;
-    if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let prefix = match market {
-        "1" => "sh",
-        // Beijing listings share the 0. channel in the stored secid.
-        "0" if code.starts_with('4') || code.starts_with('8') => "bj",
-        "0" => "sz",
-        _ => return None,
-    };
-    Some(format!("{prefix}{code}"))
-}
 
 fn build_codes(state: &State) -> Vec<String> {
     let mut ids: Vec<String> = state.watch.iter().map(|w| w.symbol.clone()).collect();
